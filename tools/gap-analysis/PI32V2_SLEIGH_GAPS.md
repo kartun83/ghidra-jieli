@@ -1355,3 +1355,87 @@ possibly-genuine occurrences.
 Static analysis, headless Ghidra batch-disassembly, and synthetic compilation via the vendor
 toolchain's own `clang`/`objdump` (running inside the existing build VM already used for this
 purpose in prior rounds) only. No device I/O, no MIDI/USB/OTA touched at any point.
+
+## Tenth round
+
+A downstream full-binary Ghidra decompile of a real firmware image (same chip as this project's
+baseline, ~620KB of application code, 1,818 functions) surfaced a concrete, previously-undiagnosed
+Ghidra-analyzer-level bug — not a SLEIGH grammar gap — plus a genuine fix for part of it, and one
+important correction to the ninth round's own root-cause writeup.
+
+### Root cause: `tbb`/`tbh` table length is unknowable to Ghidra's generic analyzer
+
+The grammar's `tbb regA` / `tbh regA` constructors (a table-branch-byte/halfword construct
+equivalent to ARM Thumb's `TBB`/`TBH`: read a 1- or 2-byte offset from `inst_next + regA`, double
+it, add it back to `inst_next`, and jump there) are semantically correct, but nothing in the
+instruction encoding says how many entries the table has — that's only implied by whatever
+bounds-check compare the compiler emits immediately before the scale+branch sequence. Ghidra's
+generic switch/jump-table analyzer has no architecture-specific knowledge of this pattern for a
+custom SLEIGH module (Ghidra's own ARM support gets this via a dedicated Java analyzer that this
+project has no equivalent of), so on a real firmware image it guesses a table length, reads well
+past the table's real end into whatever bytes happen to follow, and computes garbage jump targets
+from misinterpreted data or code bytes. A single unbounded `tbb`/`tbh` was directly proven to
+absorb a large span of unrelated downstream code into one artificially bloated function (one real
+case: a function ballooning from its real ~150-byte body to a reported 15,978 bytes, spanning
+roughly 0x40000 bytes of unrelated code as bogus "unreachable blocks" that Ghidra's own decompiler
+then had to detect and prune on every decompile).
+
+### Fix: `tools/gap-analysis/FixTbbTbhTables.java`
+
+A new headless post-analysis script locates every `tbb`/`tbh` in a program, finds its bounding
+compare (checking both compiler idioms — branching directly into the table when in-range, or
+falling through into it while branching away to a default handler when out-of-range), computes the
+real table length, re-types the table as correctly-sized data, points a `COMPUTED_JUMP` reference
+at each real case target, writes an explicit jump-table override (the same mechanism the GUI's
+"Override Jump Table" action uses, needed because the decompiler's own independent switch-recovery
+pass otherwise ignores plain references and re-derives — and re-breaks — the table from scratch),
+and rebuilds any function whose body was corrupted by the bad guess. Instances whose bound can't be
+confidently located are left untouched and logged, per this project's evidence discipline.
+
+Verified on the same real firmware image: **60 of 110 `tbb`/`tbh` instances were fixed**, confirmed
+correct by manually decoding several tables' raw bytes against the located bounds-check immediate.
+The flagship case above was correctly reduced from a reported 15,978-byte body back to its real
+~150-byte one, with a following ~20 previously-swallowed functions properly split back out as their
+own functions. No `.sinc`/`.slaspec` changes were needed or made — this is purely a downstream
+Ghidra-analysis fixup script, applicable to any program built from this module, not a grammar fix.
+
+### Correction to the ninth round: the large-image "context/state artifact" is not (only) this
+
+The ninth round's nop-padding investigation concluded that apparent decode gaps on large, real
+firmware images were a scale-dependent artifact of Ghidra's own disassembler/context runtime during
+very long forced linear sweeps, with this module's unusually wide 64-bit `contextreg` as the leading
+suspect. This round adds an important qualification: at least some of what a full-binary Ghidra
+*decompile* (as opposed to the ninth round's forced-linear-sweep *disassembly*) reports as
+`pcode error: unable to resolve constructor` warnings on a large image is explained by the `tbb`/
+`tbh` bug above, a completely different, now-understood mechanism, not the nop-padding artifact.
+
+What this round could **not** establish, despite a careful controlled test, is that the `tbb`/`tbh`
+fix explains the *majority* of those warnings. A same-firmware, same-pipeline A/B comparison (fix
+applied vs. not) showed the decompiler's total reported `pcode error` count was **byte-for-byte
+identical before and after** the fix, across both Ghidra's initial auto-analysis phase and the
+explicit decompile pass — despite the fix demonstrably correcting real function-boundary corruption
+in the process. In other words: the `tbb`/`tbh` bug is real, confirmed, and partially fixed, but it
+is evidently *not* the cause of most of the specific warning instances measured on that image. Their
+actual cause remains unidentified. Anyone using `FixTbbTbhTables.java` should expect it to fix
+function-boundary sprawl, not to reduce `pcode error` counts — those are seemingly independent
+symptoms that happened to co-occur in the same functions.
+
+### Newly discovered, not yet fixed (deferred this round)
+
+- The residual `pcode error` warnings on large real images, now confirmed **not** to be (primarily)
+  explained by either the ninth round's nop-padding artifact or this round's `tbb`/`tbh` bug —
+  still open, cause unknown.
+- 50 of 110 `tbb`/`tbh` instances on the tested image had no bounds check `FixTbbTbhTables.java`
+  could confidently locate within its current two recognized compiler idioms — left untouched
+  rather than guessed. Worth revisiting with a wider set of recognized patterns if this becomes a
+  priority.
+
+### Files touched this round
+
+- `tools/gap-analysis/FixTbbTbhTables.java` (new headless post-analysis script; no `.sinc`/`.slaspec`
+  changes)
+
+### Non-invasive-first compliance (this round)
+
+Headless Ghidra batch analysis/decompilation of a real firmware image's already-unpacked
+application binary only. No device I/O, no MIDI/USB/OTA touched at any point.

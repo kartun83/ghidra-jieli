@@ -135,6 +135,18 @@ an instruction family this module had already mostly implemented:
   meaningfully different encoding revision, not a few missing constructors, so neither was used
   as a fix source. No grammar changes this round; a ground-truth tooling bug (address-column
   parsing for a wider memory map) was found and fixed instead.
+- **A tenth round diagnosed and partially fixed a Ghidra-analyzer bug, not a grammar gap**: a
+  full-binary decompile of a real firmware image showed `tbb`/`tbh` (table-branch) instructions —
+  correctly implemented in the grammar — confusing Ghidra's generic switch-table analyzer, which
+  has no way to know a table's real length for a custom ISA and reads well past its end, pulling
+  unrelated downstream code into artificially bloated functions (one case: a real ~150-byte
+  function reported as 15,978 bytes). A new script, `tools/gap-analysis/FixTbbTbhTables.java`,
+  locates each instance's compiler-emitted bounds check, computes the real table, and rebuilds the
+  affected function; verified to correctly fix 60 of 110 instances on that image with zero
+  regressions. A controlled before/after test also disproved part of the ninth round's own
+  large-image findings: the fix left the decompiler's total `pcode error` warning count completely
+  unchanged, so the `tbb`/`tbh` bug — despite being real and fixed — is *not* the main driver of
+  those warnings on large images. Their actual cause remains open.
 
 Full derivation, confidence levels, and the remaining (lower-impact, harder) open gaps are
 documented in [`tools/gap-analysis/PI32V2_SLEIGH_GAPS.md`](tools/gap-analysis/PI32V2_SLEIGH_GAPS.md).
