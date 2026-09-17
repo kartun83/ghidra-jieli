@@ -157,6 +157,17 @@ an instruction family this module had already mostly implemented:
   `(ssat)`/`ssync` families — the other 2 are newly pinpointed, undecoded real opcodes. No grammar
   changes this round; this was a diagnostic pass to find where remaining effort is actually worth
   spending.
+- **A twelfth round cross-validated against a fourth real firmware image**, the cleanest yet:
+  99.978% of 208,003 compared instructions matched the real vendor toolchain (only 46 gap
+  addresses). Most gaps reinforce already-tracked open families with fresh data — including the
+  first-ever real-world example of the full nine-register special-register bitmap push
+  (`[--sp] = {sp, ssp, usp, icfg, psr, rets, retx, rete, reti}`), previously only a theoretical case
+  a compiler probe couldn't reach. The one new finding: a wide-immediate compare-and-branch opcode
+  family has unimplemented condition-code slots that are actively misdecoded as an unrelated,
+  shorter instruction (not just left undecoded) — a real decode-collision bug. The missing slots
+  line up with the classic ARM condition-code table (`MI`/`PL`/`VS`/`VC`/`NV`), but implementing
+  them was deliberately deferred until this grammar's flag-computation semantics (an open question
+  from the eleventh round) are resolved, to avoid guessing wrong pcode into the module.
 
 Full derivation, confidence levels, and the remaining (lower-impact, harder) open gaps are
 documented in [`tools/gap-analysis/PI32V2_SLEIGH_GAPS.md`](tools/gap-analysis/PI32V2_SLEIGH_GAPS.md).

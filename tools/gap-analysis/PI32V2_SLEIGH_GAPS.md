@@ -1515,3 +1515,110 @@ aggregate metric.
 Pure offline cross-referencing of two already-generated text files (a real firmware image's tracked
 Ghidra decompile-error address list, and that same image's real-toolchain ground-truth objdump
 listing). No new toolchain invocation, no device I/O, no MIDI/USB/OTA touched at any point.
+
+## Twelfth round
+
+A newly-available real firmware image from the same product line (a fourth distinct `app.bin`, none
+of the four sharing an MD5 with any previously-analyzed image) was run through the full
+real-objdump-vs-Ghidra diff pipeline. It produced the cleanest result of any image checked so far:
+
+| Compared instructions | Gap addresses | Match rate |
+|---|---|---|
+| 208,003 | 46 | 99.978% |
+
+### Method
+
+Same pipeline as prior rounds (real vendor `objdump` ground truth vs. Ghidra forced-linear-sweep
+dump, diffed with `pi32v2_sleigh_diff.py`), with one new piece of reusable tooling: a small ELF
+wrapper (`build_pi32v2_elf.py` in the keysmith project, not this fork — this fork has no firmware
+images of its own) that reconstructs the minimal single-section `ELF32-pi32v2` object the vendor
+`objdump` expects from a raw unpacked `app.bin`, since the vendor toolchain's own `objcopy` cannot
+wrap raw binary input directly. All 46 gap addresses were individually inspected (not sampled) via
+`pi32v2_sleigh_diff.py --detail-addr`.
+
+### Reinforced open families (no new addresses of unknown shape)
+
+- **`(ssat)` / `(ssat,x2)` / `(usat)` saturating-arithmetic family** (8 addresses): more real-world
+  operand/register data points for the already-tracked open family, no new encoding shape.
+- **Halfword multiply-accumulate with post-increment/post-decrement addressing on both operands**
+  (7 addresses, e.g. `r1_r0 = h[r0 ++= 4]*[r2 ++= 0] (u)`, `r13_r12 += [r13 ++= -4]*[r15 ++= -28]
+  (s)`): the same family first spotted as a single new address in the eleventh round
+  (`0x204c26c`); this image alone supplies 7x more data points, likely enough to attempt the actual
+  bit-level encoding derivation in a future round.
+- **Plain register op with trailing `#` suffix** (3 addresses: `r6 *= r7  #`, `r5 = r6 + r5  #`,
+  `r11.h = r6.l - 250`): reinforces the single eleventh-round example (`0x2076c84`) with more
+  operand shapes, including a byte-field (`.h`/`.l`) variant. The `#` suffix's meaning is still not
+  established.
+- **Full nine-register special-register bitmap push**, `[--sp] = {sp, ssp, usp, icfg, psr, rets,
+  retx, rete, reti}` at `0x020001d0` (in the image's reset/init code, right after the entry point) —
+  this is the exact construct the ninth round's compiler probe predicted exists but couldn't reach
+  from ordinary C and left deferred ("the compiler would not emit the full nine-register bitmap push
+  from ordinary C ... this item remains deferred"). Now confirmed as **real, present-in-firmware**
+  bytes rather than a theoretical-only case. Still not implemented; deferred, now with a concrete
+  address and byte pattern (`58 e9 2f 78`) to work from instead of no example at all.
+- **Special-register single-value pop into PC**, `{pc} = [sp++]` at `0x0204762e` (`50 e9 00 80`) —
+  same push/pop special-register family, a different member (single-register, PC target) from the
+  interrupt-prologue example the ninth round's compiler probe already confirmed decodes correctly.
+
+### New finding: wide-immediate compare-and-branch has real decode collisions, not just missing opcodes
+
+This directly resolves the ninth round's "wide-immediate compare/branch family" open question,
+which a synthetic-compiler probe left unresolved: the compiler never emits this construct from
+ordinary C, but it **is** present in real firmware (likely hand-written or library assembly), and it
+is worse than an inert gap — the unimplemented condition-code slots are currently **silently
+misdecoded** as an unrelated, shorter instruction, which desyncs the linear sweep at that point.
+
+Ten addresses across two related opcode families collide with the existing `or`/`and
+[rX+offset],#imm` constructor (already flagged elsewhere in this doc as "overly permissive"):
+
+| Family | ins0012 pattern | Example | Real bytes | Ghidra's wrong decode |
+|---|---|---|---|---|
+| `if (rA ?? imm) goto` (unsigned, `imm1627` form) | `0x1f04`–`0x1f07`, `0x1f0f` | `if (r15 ?? -1) goto -2` | `05 ff ff ff ff ff` | `or [r15+0x14],#0x1fe` (4 bytes, wrong length) |
+| `ifs (rA ?? imm) goto` (signed, wider immediate) | `0x2c`/`0x2d` prefix | `ifs (r1 > 1056964608) goto 8` | `2c ff 7c 15 04 00` | `or [r1+#0xb0],#0x3f000000` (4 bytes, wrong length) |
+
+The first family's opcode slot is the **same `ins0012=0x1f0X` constructor group** that already had
+two of exactly this kind of previously-unimplemented-slot bug fixed in an earlier round (`0x1f0a` =
+`jge`, `0x1f0c` = `jg`, both confirmed against real firmware and fixed with the exact same
+`s>=`/`s>` pcode pattern already in this file). The slots already implemented in that group —
+`0x00`=`je`, `0x01`=`jne`, `0x02`=`jae`, `0x03`=`jb`, `0x08`=`ja`, `0x09`=`jbe`, `0x0a`=`jge`,
+`0x0b`=`jb` (signed `s<`, mnemonic text reused from the unsigned form), `0x0c`=`jg`, `0x0d`=`jbe`
+(packedimm12 variant) — line up **exactly** with the low 4 bits of the classic ARM condition-code
+table (`EQ NE CS CC MI PL VS VC HI LS GE LT GT LE AL NV`) once mapped past the equality/relational
+codes already covered here. That leaves `0x04`(`MI`)/`0x05`(`PL`)/`0x06`(`VS`)/`0x07`(`VC`) as
+flag-based (negative/positive/overflow-set/overflow-clear) conditions and `0x0f`(`NV`, "never") as
+the missing slots — a strong structural match, not proven.
+
+**Not fixed this round, deliberately**: unlike the earlier `0x1f0a`/`0x1f0c` fixes, which compared a
+register directly against the embedded immediate (`s>=`/`s>`, unambiguous), an `MI`/`PL`/`VS`/`VC`
+condition would need to test **status flags** (sign/overflow) rather than compare against the
+embedded immediate operand — and this grammar's flag-computation model is itself an open question
+(the eleventh round's still-unresolved "`#` suffix" case, above). The embedded immediate in the real
+examples (`-1`, `-223`, `242`, `144` — not a fixed sentinel like `0`) argues against a pure
+flag-only reading too. Implementing guessed pcode for a flag semantics this fork hasn't nailed down
+yet would risk producing confidently-wrong decompilation rather than an honestly-flagged gap, so
+this is documented and deferred rather than guessed into `.sinc`.
+
+One more, unrelated single-address collision of the same shape: `r15 = [npc + 16777178]` (an
+`npc`-relative load, `af ff da ff ff 00`, 6 bytes) is misdecoded as `and [r15+-0x44],#0x1b4` (4
+bytes) by the same permissive `and`/`or [rX+off],#imm` constructor. Not yet investigated further.
+
+### New tooling
+
+- `build_pi32v2_elf.py` (added to the keysmith project's `tools/`, not this fork, since it operates
+  on firmware binaries rather than the SLEIGH module itself): wraps a raw code blob into the minimal
+  ELF32-pi32v2 object the vendor `objdump` needs, reusable for any future firmware image without
+  needing the vendor `clang` to produce one via a real compile.
+
+### Files touched this round
+
+- None (`.sinc`/`.slaspec`) — diagnostic/classification only, consistent with this project's
+  "verify before fixing" discipline. The `or`/`and [rX+off],#imm` vs. `0x1f0X`/`0x2c`/`0x2d`
+  collision is a strong, well-scoped candidate for a future round once the flag-semantics question
+  is resolved (or once enough further examples pin down whether these are genuinely flag-based or
+  something else).
+
+### Non-invasive-first compliance (this round)
+
+New real-toolchain `objdump` invocation (read-only, on an already-unpacked local firmware image)
+and a fresh Ghidra headless forced-linear-sweep import (also read-only, local). No MIDI, USB, or
+OTA/flash I/O was performed or attempted at any point.
