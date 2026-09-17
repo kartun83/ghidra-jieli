@@ -1439,3 +1439,79 @@ symptoms that happened to co-occur in the same functions.
 
 Headless Ghidra batch analysis/decompilation of a real firmware image's already-unpacked
 application binary only. No device I/O, no MIDI/USB/OTA touched at any point.
+
+## Eleventh round
+
+Following on directly from the tenth round's unresolved question ("the residual `pcode error`
+warnings ... still open, cause unknown"), this round definitively classifies all 154 unique
+tracked `pcode error` addresses on the same real firmware image, using ground truth that already
+existed from earlier rounds rather than any new toolchain run.
+
+### Method: cross-reference the tracked error addresses directly against existing ground truth
+
+Every one of the 154 addresses was looked up directly in the real vendor toolchain's own full
+`objdump` disassembly listing of the exact same binary (already generated in an earlier round for
+the unrelated `pi32v2_sleigh_diff.py` gap-finder — no new toolchain run was needed). Three outcomes
+are possible for each address:
+
+1. It is an instruction-start address in the real listing, and the real toolchain **also** prints
+   `<unknown instruction>` there.
+2. It is an instruction-start address in the real listing, and the real toolchain decodes a clean,
+   ordinary mnemonic there.
+3. It is **not** an instruction-start address in the real listing at all — it falls strictly inside
+   the byte range of the real listing's preceding instruction.
+
+### Result: 96% of the tracked addresses are not grammar gaps
+
+- **78 of 154 (51%)** fall into outcome 1: the authoritative real toolchain itself cannot decode an
+  instruction at that address. These are not gaps in this grammar — they are non-instruction bytes
+  (data-in-`.text`, alignment padding, jump-table remnants) that no disassembler, real or Ghidra's,
+  can be expected to decode as code. Consistent with the ninth round's "compiler emitted
+  non-instruction words" finding, now confirmed address-by-address for this specific error set.
+- **70 of 154 (45%)** fall into outcome 3, and all 70 (verified individually, not sampled) land
+  strictly inside the real toolchain's immediately preceding instruction. This is a decode-cascade
+  artifact: once Ghidra's forced linear sweep desyncs from real instruction boundaries at one point
+  in a stretch (e.g. right after one of the 78 non-instruction spots above), every subsequent
+  "error" address in that stretch is an artifact of the wrong starting offset, not an independent
+  decode problem. These 70 do not need — and could not usefully receive — 70 separate
+  investigations; fixing whatever precedes a stretch (or accepting it as non-code) resolves the
+  whole cascade at once.
+- **Only 6 of 154 (4%)** fall into outcome 2: the real toolchain decodes a clean instruction at that
+  exact address, and Ghidra's grammar still fails. These are the only genuine SLEIGH-grammar-gap
+  candidates in the entire tracked set:
+
+  | Address | Bytes | Real toolchain mnemonic | Status |
+  |---|---|---|---|
+  | `0x2043564` | `2a 00` | `ssync` | Matches the already-tracked "second `ssync`/`btbclr` encoding" open family. |
+  | `0x204c56e` | `ff f5 00 00` | `r1_r0 = r0.l,r0.l *\|* -16 (ssat) #` | Exact match to an already-documented open `(ssat)` example. |
+  | `0x2050008` | `ff f5 00 8f` | `r9_r8 = r0.l,r0.l *\|* -1 (ssat) #` | Same open family; new address/operand data point. |
+  | `0x204c26c` | `ee ee ff fe` | `r15_r14 -= h[r15 ++= -2]*r14 (s)` | New: a halfword multiply-accumulate-subtract with post-decrement addressing, not previously tracked. |
+  | `0x204c46a` | `e9 ef ff 60` | `[r6+-92] &= 0xFFFFFF00` | New: a memory-operand AND-immediate instruction, not previously tracked. |
+  | `0x2076c84` | `76 db` | `r6 *= r7 #` | New: a plain register multiply; meaning of the trailing `#` flag-setting suffix not yet established. |
+
+This also explains the tenth round's own negative finding: the `tbb`/`tbh` fix left the tracked
+`pcode error` count completely unchanged because the vast majority of that count (148 of 154) was
+never a grammar gap to begin with — it was non-instruction bytes and their downstream decode
+cascades. The `tbb`/`tbh` bug and the (still largely unaddressed) `(ssat)`/`(ssat,x2)` family are
+two separate, independently confirmed problems that happened to be measured through the same
+aggregate metric.
+
+### Newly discovered, not yet fixed (deferred this round)
+
+- The two brand-new addresses (`0x204c26c`, `0x204c46a`) and the `r6 *= r7 #` case (`0x2076c84`)
+  have not been analyzed for their exact bit-level encoding — this round only established that they
+  are real, currently-undecoded opcodes via ground-truth cross-reference, not their grammar fix.
+- No `.sinc`/`.slaspec` changes were made this round — this was purely a diagnostic/classification
+  pass to find where remaining effort is actually worth spending, per this project's "verify before
+  fixing" discipline.
+
+### Files touched this round
+
+- None (`.sinc`/`.slaspec`/tooling) — this round's output is entirely the classification above; no
+  new script was needed because the required ground-truth data already existed from prior rounds.
+
+### Non-invasive-first compliance (this round)
+
+Pure offline cross-referencing of two already-generated text files (a real firmware image's tracked
+Ghidra decompile-error address list, and that same image's real-toolchain ground-truth objdump
+listing). No new toolchain invocation, no device I/O, no MIDI/USB/OTA touched at any point.

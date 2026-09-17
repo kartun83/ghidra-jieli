@@ -147,6 +147,16 @@ an instruction family this module had already mostly implemented:
   large-image findings: the fix left the decompiler's total `pcode error` warning count completely
   unchanged, so the `tbb`/`tbh` bug — despite being real and fixed — is *not* the main driver of
   those warnings on large images. Their actual cause remains open.
+- **An eleventh round closed that open question**: every one of the 154 tracked `pcode error`
+  addresses on the same firmware image was cross-referenced directly against the real vendor
+  toolchain's own ground-truth disassembly of that exact binary (already generated in an earlier
+  round — no new toolchain run needed). Result: 96% were never grammar gaps — 51% are addresses
+  the real toolchain itself can't decode either (non-instruction bytes), and 45% are decode-cascade
+  artifacts that land strictly inside the real toolchain's preceding instruction. Only 6 of 154 are
+  genuine SLEIGH-grammar-gap candidates, and 4 of those already match this project's known open
+  `(ssat)`/`ssync` families — the other 2 are newly pinpointed, undecoded real opcodes. No grammar
+  changes this round; this was a diagnostic pass to find where remaining effort is actually worth
+  spending.
 
 Full derivation, confidence levels, and the remaining (lower-impact, harder) open gaps are
 documented in [`tools/gap-analysis/PI32V2_SLEIGH_GAPS.md`](tools/gap-analysis/PI32V2_SLEIGH_GAPS.md).
