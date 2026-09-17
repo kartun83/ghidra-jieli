@@ -175,6 +175,20 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
 }
 
 #
+# rA = [rB ++= rC]   (rC is restricted to r8-r15 by the encoding)
+# => lw rA, [rB ++= rC]
+#
+# Confirmed against research/disasm/app_full_disasm_llvm.txt (real
+# LLVM/clang-toolchain ground truth): 16-bit word, ins1015=0x2, ins0303=0,
+# regAl=(0,2) dest, regBl=(4,6) base, regCh=(7,9)+8 stride register.
+#
+:lw regAl, [regBl ++= regCh] is group=0 & ins1015=0x2 & ins0303=0 & regAl & regBl & regCh
+{
+	regAl = *:4 regBl;
+	regBl = regBl + regCh;
+}
+
+#
 # rA = [rB+simm7m4]
 # => lw rA, [rB + simm7m4]
 #
@@ -225,6 +239,16 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
 {
 	regAl = zext(*:2 regBl);
 	regBl = regBl + 2;
+}
+
+#
+# rA = h[rB ++= rC] (u)   (rC restricted to r8-r15 by the encoding)
+# => lh.z rA, [rB ++= rC]
+#
+:lh.z regAl, [regBl ++= regCh] is group=0 & ins1015=0x3 & ins0303=0 & regAl & regBl & regCh
+{
+	regAl = zext(*:2 regBl);
+	regBl = regBl + regCh;
 }
 
 #
@@ -396,6 +420,16 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
 	regBl = regBl - 1;
 }
 
+#
+# rA = b[rB ++= rC] (u)   (rC restricted to r8-r15 by the encoding)
+# => lb.z rA, [rB ++= rC]
+#
+:lb.z regAl, [regBl ++= regCh] is group=0 & ins1015=0x4 & ins0303=0 & regAl & regBl & regCh
+{
+	regAl = zext(*:1 regBl);
+	regBl = regBl + regCh;
+}
+
 # 
 # rA = b[++rB=imm8] (u)
 # => lb.z rA, [++rB=imm8] (positive number)
@@ -521,6 +555,16 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
 }
 
 #
+# [rB ++= rC] = rA   (rC restricted to r8-r15 by the encoding)
+# => sw rA, [rB ++= rC]
+#
+:sw regAl, [regBl ++= regCh] is group=0 & ins1015=0x2 & ins0303=1 & regAl & regBl & regCh
+{
+	*:4 regBl = regAl;
+	regBl = regBl + regCh;
+}
+
+#
 # [rB+simm7m4] = rA
 # => sw rA, [rB + simm7m4]
 #
@@ -634,6 +678,16 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
 }
 
 #
+# h[rB ++= rC] = rA   (rC restricted to r8-r15 by the encoding)
+# => sh rA, [rB ++= rC]
+#
+:sh regAl, [regBl ++= regCh] is group=0 & ins1015=0x3 & ins0303=1 & regAl & regBl & regCh
+{
+	*:2 regBl = regAl:2;
+	regBl = regBl + regCh;
+}
+
+#
 # h[rB+simm6m2] = rA
 # => sh rA, [rB + simm6m2]
 #
@@ -694,6 +748,16 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
 {
 	*:1 regBl = regAl:1;
 	regBl = regBl - 1;
+}
+
+#
+# b[rB ++= rC] = rA   (rC restricted to r8-r15 by the encoding)
+# => sb rA, [rB ++= rC]
+#
+:sb regAl, [regBl ++= regCh] is group=0 & ins1015=0x4 & ins0303=1 & regAl & regBl & regCh
+{
+	*:1 regBl = regAl:1;
+	regBl = regBl + regCh;
 }
 
 #
