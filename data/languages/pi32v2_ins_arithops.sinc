@@ -407,3 +407,33 @@
 <skip>
     eregA = eregB;
 }
+
+###########################################################################################
+# Saturating add (signed)
+###########################################################################################
+
+#
+# rA = rB + rC, clamped to [INT32_MIN, INT32_MAX] on signed overflow.
+#
+# Only one opcode slot (0x439) has been observed in real firmware, always with
+# the same fixed register combination (r10 = r10 + r11 (ssat)), so unlike
+# smax/smin above there is no confirmed second (unsigned) variant sharing this
+# opcode via an imm1619-style flag bit -- the neighboring 0x436-0x438 slots in
+# this opcode family remain unconfirmed/unimplemented. imm1619 is deliberately
+# left unconstrained here since no competing mnemonic at ins0011=0x439 has been
+# observed to require disambiguating against.
+#
+:sadd.sat eregA, eregB, eregC is group=7 & ins0011=0x439 ; eregA & eregB & eregC
+{
+    local sum:4 = eregB + eregC;
+    local ovf:4 = (eregB ^ sum) & (eregC ^ sum);
+    if (ovf s>= 0) goto <noovf>;
+    if (eregB s< 0) goto <neg>;
+    eregA = 0x7fffffff;
+    goto inst_next;
+<neg>
+    eregA = 0x80000000;
+    goto inst_next;
+<noovf>
+    eregA = sum;
+}
