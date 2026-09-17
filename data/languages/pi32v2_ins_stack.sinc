@@ -58,6 +58,14 @@ popmapsreg: psr is counter=5 & psr {popreg(psr);}
 popmapsreg: cnum is counter=6 & cnum {popreg(cnum);}
 popmapsreg: sr7 is counter=7 & sr7 {popreg(sr7);}
 
+# Push special registers based on counter (mirrors popmapsreg above; only
+# the {reti,rete,retx,rets} bitmap slots -- counter 0-3 -- are used by the
+# generic push-direction special-register-list constructors below).
+pshmapsreg: reti is counter=0 & reti {pushreg(reti);}
+pshmapsreg: rete is counter=1 & rete {pushreg(rete);}
+pshmapsreg: retx is counter=2 & retx {pushreg(retx);}
+pshmapsreg: rets is counter=3 & rets {pushreg(rets);}
+
 # Bit ops
 next: is epsilon [counter=counter+1;]{}
 prev: is epsilon [counter=counter-1;]{}
@@ -69,6 +77,8 @@ popmreg: popmapreg is popmapreg & bitset=1 [sep=1;]{}
 popmreg: is bitset=0 {}
 popmsreg: popmapsreg is popmapsreg & bitset=1 [sep=1;]{}
 popmsreg: is bitset=0 {}
+pshmsreg: pshmapsreg is pshmapsreg & bitset=1 [sep=1;]{}
+pshmsreg: is bitset=0 {}
 msep: "," is  sep=1 & bitset=1 {}
 msep: "" is sep=0 | bitset=0 {}
 
@@ -90,6 +100,17 @@ popmapsregs: popmapsregs^popmsreg^msep is counter<3 & msregread & msep & popmsre
     { build popmsreg; build popmapsregs; }
 popmapsregs: popmsreg^msep is counter=3 & msep & msregread & popmsreg {}
 popsrmap: popmapsregs is popmapsregs [bitset=0; counter=0; sep=0;]{}
+
+# Recursively generate our push special registers list. Push order is the
+# reverse of pop order (rets first / outermost, reti last / innermost) --
+# i.e. descending counter, using `prev` -- mirroring the LIFO push/pop
+# symmetry already established by the {psr,rets,reti} pcode further below
+# (left-most displayed register is always the first one physically pushed,
+# and correspondingly the last one popped).
+pshmapsregs: pshmsreg^msep^pshmapsregs is counter>0 & msregread & pshmsreg & msep & prev & pshmapsregs
+    { build pshmsreg; build pshmapsregs; }
+pshmapsregs: pshmsreg is counter=0 & msregread & pshmsreg {}
+pshsrmap: pshmapsregs is pshmapsregs [bitset=0; counter=3; sep=0;]{}
 
 #######################################
 # Registers boundary to register list
@@ -164,7 +185,42 @@ poppcregs: {pc,popreglist4} is popreglist4 & pc & ins0003
     build popreglist4;
     popreg(pc);
     sp = mult_addr;
-    return [pc]; 
+    return [pc];
+}
+
+# Pop rets and then reglist (r3...rX, X<=3) -- sibling of pshretsregs above,
+# needed for the ins0003<4 half of the {rets,...} pop-list family (nibble 3
+# of the ins0407-based family below; see the constructors that reference it).
+popretsregs3: {rets,popreglist3} is popreglist3 & rets & ins0003
+[ counter=ins0003 & 0x0f; ]
+{
+    mult_addr = sp;
+    build popreglist3;
+    popreg(rets);
+    sp = mult_addr;
+}
+
+# Pop reglist (r3...rX, X<=3) and then pc -- sibling of poppcregs above,
+# needed for the ins0003<4 half of the {pc,...} pop-list family.
+poppcregs3: {pc,popreglist3} is popreglist3 & pc & ins0003
+[ counter=ins0003 & 0x0f; ]
+{
+    mult_addr = sp;
+    build popreglist3;
+    popreg(pc);
+    sp = mult_addr;
+    return [pc];
+}
+
+# Push rets and then reglist (r3...rX, X<=3) -- sibling of pshretsregs above,
+# needed for the ins0003<4 half of the {rets,...} push-list family.
+pshretsregs3: {rets,pushreglist3} is pushreglist3 & rets & ins0003
+[ counter=ins0003 & 0x0f; ]
+{
+    mult_addr = sp;
+    pushreg(rets);
+    build pushreglist3;
+    sp = mult_addr;
 }
 
 #
@@ -191,39 +247,54 @@ poppcregs: {pc,popreglist4} is popreglist4 & pc & ins0003
 }
 
 
-# /!\ Not sure that it only concerns psr/rets/reti as 6 lower bits indicate
-# 101001, which corresponds to the exact bitmap on special register bits
-# (reti:0, rets:3, psr:5)
-# Maybe considering that other registers combination might be pushed, but
-# not seen in existing code for now.
-# 
-# [--sp] = {psr, rets, reti}
-# => push {psr, rets, reti}
-# 
-:push {psr,rets,reti} is group=0 & ins0411=0x4e & regA=9 & psr & rets & reti
-{
-    mult_addr = sp;
-    pushreg(psr);
-    pushreg(rets);
-    pushreg(reti);
-    sp = mult_addr;
-}
-
-# 
-# {psr, rets, reti} = [sp++]
-# => pop {psr, rets, reti}
-# 
-:pop {psr,rets,reti} is group=0 & ins0411=0x4a & regA=9 & psr & rets & reti
-{
-    mult_addr = sp;
-    popreg(reti);
-    popreg(rets);
-    popreg(psr);
-    sp = mult_addr;
-}
+##############################################################################
+# Multi-register range-list / special-register-list push/pop family
+#
+# This whole family shares a fixed second byte 0x04 (i.e. ins0812=0x04 --
+# equivalently ins0412 = ins0407 + 0x40 for every constructor below, since
+# the fixed 0x04 upper byte always contributes exactly +0x40 to the 9-bit
+# ins0412 field) and uses the top nibble of the low byte (ins0407) as an
+# opcode-family selector, with the low nibble (ins0003) as either a
+# 4-bit "range count" (nibbles 3-7) or a 4-bit register-presence bitmap
+# (nibbles 8-f). Confirmed against research/disasm/app_full_disasm_llvm.txt,
+# including an apparent exhaustive self-test/opcode-enumeration table at
+# 0x2093e00-0x2094642 that walks nearly every nibble/count combination in
+# this family (and several neighboring families) in strict sequence --
+# an unusually strong ground-truth source for validating the bitfield
+# formulas below against every value, not just the combinations that
+# happen to occur "organically" elsewhere in the binary.
+#
+# ins0407 nibble decode:
+#   0x1 : push rets alone, no range (only ins0003=0 observed/handled)
+#   0x3 : pop  {rets, range}      (range = r3..rN for N<4, rN..r4 for N>=4)
+#   0x4 : pop  {range}
+#   0x5 : pop  {pc, range}
+#   0x6 : push {range}
+#   0x7 : push {rets, range}
+#   0x8 : pop  {bitmap}                (bitmap over reti/rete/retx/rets)
+#   0x9 : pop  {sr4, bitmap}
+#   0xa : pop  {psr, bitmap}
+#   0xb : pop  {psr, sr4, bitmap}
+#   0xc : push {bitmap}
+#   0xd : push {sr4, bitmap}
+#   0xe : push {psr, bitmap}
+#   0xf : push {psr, sr4, bitmap}
+#
+# Note on known cosmetic limitation: popsrmap/pshsrmap's recursive bitmap
+# builder (like the pre-existing group=7 pshmap/popmap machinery it mirrors)
+# can render incorrectly when this family's own context bits happen to
+# carry over between two back-to-back instructions of this same family
+# during a forced linear sweep (observed on already-shipped nibble-0x8
+# occurrences, e.g. two adjacent real {bitmap} pops rendering with a
+# spurious leading separator or a dropped register) -- a pre-existing
+# quirk of this context-register-driven list-building idiom, not something
+# newly introduced here. It does not affect instruction length/decode
+# (the property this differential-testing methodology actually measures),
+# only cosmetic display text in that specific adjacency case.
+##############################################################################
 
 #
-# {rets, regs...} = [sp++]
+# {rets, regs...} = [sp++]  (nibble 3, ins0003 >= 4: rets + rN..r4)
 # => pop {rets, regs...}
 #
 :pop {rets, popreglist4} is group=0 & ins0412=0x043 & ins0003>=4 & ins0003 & popreglist4 & rets
@@ -236,10 +307,21 @@ poppcregs: {pc,popreglist4} is popreglist4 & pc & ins0003
 }
 
 #
-# {regs...} = [sp++]
+# {rets, regs...} = [sp++]  (nibble 3, ins0003 < 4: rets + r3..rN)
+# => pop {rets, regs...}
+#
+:pop {popretsregs3} is group=0 & ins0412=0x043 & ins0003<4 & popretsregs3
+{
+    mult_addr = sp;
+    build popretsregs3;
+    sp = mult_addr;
+}
+
+#
+# {regs...} = [sp++]  (nibble 4, ins0003 < 4: r3..rN)
 # => pop {regs...}
 #
-:pop {popreglist3} is group=0 & ins0412=0x044 & ins0003 & popreglist3
+:pop {popreglist3} is group=0 & ins0412=0x044 & ins0003<4 & ins0003 & popreglist3
 [ counter = ins0003 & 0xf; ]
 {
     mult_addr = sp;
@@ -248,7 +330,19 @@ poppcregs: {pc,popreglist4} is popreglist4 & pc & ins0003
 }
 
 #
-# {sregs...} = [sp++]
+# {regs...} = [sp++]  (nibble 4, ins0003 >= 4: rN..r4)
+# => pop {regs...}
+#
+:pop {popreglist4} is group=0 & ins0412=0x044 & ins0003>=4 & ins0003 & popreglist4
+[ counter = ins0003 & 0xf; ]
+{
+    mult_addr = sp;
+    build popreglist4;
+    sp = mult_addr;
+}
+
+#
+# {sregs...} = [sp++]  (nibble 8: bitmap over reti/rete/retx/rets)
 # => pop {sregs...}
 #
 :pop {popsrmap} is group=0 & ins0412=0x048 ... & popsrmap
@@ -259,10 +353,55 @@ poppcregs: {pc,popreglist4} is popreglist4 & pc & ins0003
 }
 
 #
-# {pc, regs...} = [sp++]
+# {sr4} = [sp++] / {sr4, sregs...} = [sp++]  (nibble 9)
+# => pop {sr4[, sregs...]}
+#
+# Note: sr4/psr here are printed as bare literal text (not bound register
+# operands) and pushed/popped by directly naming the global register in
+# pcode. They cannot be matched as a `sregA`-attached operand field the way
+# rets/pc/reti are elsewhere in this file, because that field physically
+# aliases the same bits (0,3) that ins0003 uses as the reti/rete/retx/rets
+# bitmap in this family -- binding both in the same constructor produced a
+# genuine pattern conflict ("Pattern size cannot vary") since the two
+# interpretations of those bits are mutually exclusive here.
+:pop {"sr4,",popsrmap} is group=0 & ins0412=0x049 ... & popsrmap
+{
+    mult_addr = sp;
+    build popsrmap;
+    popreg(sr4);
+    sp = mult_addr;
+}
+
+#
+# {psr} = [sp++] / {psr, sregs...} = [sp++]  (nibble a)
+# => pop {psr[, sregs...]}
+#
+:pop {"psr,",popsrmap} is group=0 & ins0412=0x04a ... & popsrmap
+{
+    mult_addr = sp;
+    build popsrmap;
+    popreg(psr);
+    sp = mult_addr;
+}
+
+#
+# {psr, sr4} = [sp++] / {psr, sr4, sregs...} = [sp++]  (nibble b)
+# => pop {psr, sr4[, sregs...]}
+#
+:pop {"psr,sr4,",popsrmap} is group=0 & ins0412=0x04b ... & popsrmap
+{
+    mult_addr = sp;
+    build popsrmap;
+    popreg(sr4);
+    popreg(psr);
+    sp = mult_addr;
+}
+
+#
+# {pc, regs...} = [sp++]  (nibble 5, ins0003 >= 4: pc + rN..r4)
 # => pop {pc, regs...}
 #
-:pop poppcregs is group=0 & ins0412=0x045 & ins0003 & poppcregs
+:pop poppcregs is group=0 & ins0412=0x045 & ins0003>=4 & ins0003 & poppcregs
 {
     mult_addr = sp;
     build poppcregs;
@@ -270,10 +409,23 @@ poppcregs: {pc,popreglist4} is popreglist4 & pc & ins0003
 }
 
 #
-# [--sp] = {...regs, r3}
-# => push {...regs, r3}
+# {pc, regs...} = [sp++]  (nibble 5, ins0003 < 4: pc + r3..rN)
+# => pop {pc, regs...}
 #
-:push {pushreglist3} is group=0 & ins0412=0x046 & ins0003>0 & ins0003 & pushreglist3
+:pop poppcregs3 is group=0 & ins0412=0x045 & ins0003<4 & poppcregs3
+{
+    mult_addr = sp;
+    build poppcregs3;
+    sp = mult_addr;
+}
+
+#
+# [--sp] = {regs...}  (nibble 6, ins0003 < 4: r3..rN, including ins0003=0
+# i.e. the full r3-r0 range -- previously incorrectly guarded to exclude
+# this case)
+# => push {regs...}
+#
+:push {pushreglist3} is group=0 & ins0412=0x046 & ins0003<4 & ins0003 & pushreglist3
 [ counter = ins0003 & 0xf; ]
 {
     mult_addr = sp;
@@ -282,13 +434,84 @@ poppcregs: {pc,popreglist4} is popreglist4 & pc & ins0003
 }
 
 #
-# [--sp] = {rets, r4, ...}
-# => push {rets, r4, ...}
+# [--sp] = {regs...}  (nibble 6, ins0003 >= 4: rN..r4)
+# => push {regs...}
+#
+:push {pushreglist4} is group=0 & ins0412=0x046 & ins0003>=4 & ins0003 & pushreglist4
+[ counter = ins0003 & 0xf; ]
+{
+    mult_addr = sp;
+    build pushreglist4;
+    sp = mult_addr;
+}
+
+#
+# [--sp] = {rets, regs...}  (nibble 7, ins0003 >= 4: rets + rN..r4)
+# => push {rets, regs...}
 #
 :push pshretsregs is group=0 & ins0412=0x047 & ins0003>=4 & pshretsregs
 {
     mult_addr = sp;
     build pshretsregs;
+    sp = mult_addr;
+}
+
+#
+# [--sp] = {rets, regs...}  (nibble 7, ins0003 < 4: rets + r3..rN)
+# => push {rets, regs...}
+#
+:push pshretsregs3 is group=0 & ins0412=0x047 & ins0003<4 & pshretsregs3
+{
+    mult_addr = sp;
+    build pshretsregs3;
+    sp = mult_addr;
+}
+
+#
+# [--sp] = {sregs...}  (nibble c: bitmap over reti/rete/retx/rets)
+# => push {sregs...}
+#
+:push {pshsrmap} is group=0 & ins0412=0x04c ... & pshsrmap
+{
+    mult_addr = sp;
+    build pshsrmap;
+    sp = mult_addr;
+}
+
+#
+# [--sp] = {sr4} / [--sp] = {sr4, sregs...}  (nibble d)
+# => push {sr4[, sregs...]}
+#
+:push {"sr4,",pshsrmap} is group=0 & ins0412=0x04d ... & pshsrmap
+{
+    mult_addr = sp;
+    pushreg(sr4);
+    build pshsrmap;
+    sp = mult_addr;
+}
+
+#
+# [--sp] = {psr} / [--sp] = {psr, sregs...}  (nibble e)
+# => push {psr[, sregs...]}
+#
+:push {"psr,",pshsrmap} is group=0 & ins0412=0x04e ... & pshsrmap
+{
+    mult_addr = sp;
+    pushreg(psr);
+    build pshsrmap;
+    sp = mult_addr;
+}
+
+#
+# [--sp] = {psr, sr4} / [--sp] = {psr, sr4, sregs...}  (nibble f)
+# => push {psr, sr4[, sregs...]}
+#
+:push {"psr,sr4,",pshsrmap} is group=0 & ins0412=0x04f ... & pshsrmap
+{
+    mult_addr = sp;
+    pushreg(psr);
+    pushreg(sr4);
+    build pshsrmap;
     sp = mult_addr;
 }
 

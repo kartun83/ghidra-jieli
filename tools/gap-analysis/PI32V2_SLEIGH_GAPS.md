@@ -452,3 +452,156 @@ Same as above, plus: the real JieLi `clang`/`objdump` toolchain was used exclusi
 compile and disassemble small local throwaway `.c` files inside a Linux VM already set up for
 this purpose — never to touch, flash, or communicate with real hardware. No MIDI, USB, or
 OTA/flash I/O was performed or attempted at any point.
+
+---
+
+# Third round: multi-register range-list/special-register-list push/pop family, LEN_MISMATCH/MISSING triage
+
+Scope: same as above (static analysis only, real-firmware ground truth plus the same
+batched-linear-sweep Ghidra headless harness). No new synthetic-compilation technique was
+needed this round; the target family turned out to have unusually strong ground truth already
+present in the real firmware (see below).
+
+## Results this round
+
+| Stage | BAD | LEN_MISMATCH | MISSING | Total gap addrs | Match rate |
+|---|---|---|---|---|---|
+| Start of this round (re-measured against the same tooling/ground truth) | 360 | 38 | 7 | 405 | 99.78% |
+| + multi-register range-list/special-register-list push/pop family (fix #8) | 264 | 38 | 7 | **309** | **99.83%** |
+
+Final state: **99.83%** of real (non-data-region, non-`<unknown instruction>`) ground-truth
+instructions decode with matching length, up from 99.78% at the end of the previous round.
+
+## Fix #8: multi-register range-list and special-register-list push/pop family (~96 addresses)
+
+This was the item flagged as deferred, higher-effort work in the previous round's "Still open"
+list. It turned out to be a single coherent 16-way-nibble-dispatched family, not a collection
+of unrelated encodings, and — unusually for this project — the real firmware contains what
+looks like a compiler- or vendor-emitted **exhaustive opcode self-test/enumeration table**
+spanning a contiguous stretch of `.text` that walks nearly every nibble/count/bitmap
+combination in this family (and several neighboring ones) in strict sequential order. That
+table gave far stronger ground truth than any single real call site could: every value of the
+relevant bitfields, not just the combinations that happen to occur "organically" in the
+compiled application code.
+
+All instructions in this family are a fixed 16-bit word with the upper byte constant (`0x04`)
+and the lower byte carrying the actual opcode information:
+
+- Bits 4-7 of the lower byte (`ins0407`, equivalently `ins0412 = ins0407 + 0x40` once the fixed
+  upper byte is folded in) select one of 14 sub-families:
+  - `0x1`: push `rets` alone, no register range (only the `ins0003=0` case has any
+    confirmed real occurrence).
+  - `0x3`/`0x4`/`0x5`/`0x6`/`0x7`: pop/push a contiguous register **range** with an optional
+    `rets` or `pc` prefix. The 4-bit low nibble (`ins0003`) is a count field: for `ins0003<4`
+    the range is `r3..r(ins0003)` (i.e. counting down from a fixed `r3` top); for `ins0003>=4`
+    the range is `r(ins0003)..r4` (i.e. counting up to a fixed `r4` bottom). This is exactly
+    the range-boundary convention the existing `pushreglist3`/`popreglist3`/`pushreglist4`/
+    `popreglist4` tables in `pi32v2_ins_stack.sinc` already implemented — they just weren't
+    wired up to cover the *full* `ins0003` domain (0-15) for every sub-family; several
+    `ins0003<4` or `ins0003>=4` halves were entirely missing, and one existing constructor had
+    an incorrect `ins0003>0` guard that excluded the valid `ins0003=0` case.
+  - `0x8`-`0xf`: pop/push a **bitmap** over the four "small" special registers
+    (`reti`/`rete`/`retx`/`rets`, one bit each in the low nibble), optionally prefixed with
+    `sr4` and/or `psr` depending on two more bits of the nibble (`0x8`=plain pop, `0x9`=pop+
+    `sr4`, `0xa`=pop+`psr`, `0xb`=pop+`psr`+`sr4`, `0xc`-`0xf` are the push-direction mirrors).
+    The pre-existing `popsrmap` bitmap-list machinery already handled the plain `0x8` case;
+    this round added an analogous push-direction `pshsrmap` table and wired up `0x9`-`0xf`.
+
+Confirmed against the exhaustive self-test table plus every other real occurrence found for
+each nibble/count value; the range-family formula in particular was checked against every one
+of its ~40 real occurrences and matched exactly with no residual mismatches.
+
+**Confidence: high** on every bitfield/formula derivation above (independently reproduced by
+brute-force fitting against the exhaustive table). **Medium** on the exact push/pop pcode
+*order* for the `sr4`/`psr` prefix registers relative to the bitmap items — inferred by
+LIFO-symmetry with an existing hardcoded example in the same file (`push {psr,rets,reti}` /
+`pop {psr,rets,reti}`, which pushes in display-left-to-right order and pops in the reverse
+order), not independently re-derived from raw stack-pointer arithmetic in the binary.
+
+### A blocking SLEIGH constraint found along the way
+
+An early version of this fix tried to bind `sr4`/`psr` as ordinary attached-register operand
+fields (the way `rets`/`pc`/`reti` are already bound elsewhere in this file) alongside the
+bitmap subtable in the same constructor. This reliably failed to compile with `Pattern size
+cannot vary (missing ... ?)`. Root cause: `sr4`/`psr`/`rets`/`pc`/`reti` are all attached to
+the *same* 4-bit field (`sregA`, bits 0-3) as the very bitmap this family also reads out of
+those identical bits (`ins0003`) — binding both a fixed register value and a free 4-bit bitmap
+to the same physical bits in one constructor is a genuine contradiction, not just an SLEIGH
+ambiguity-checker false positive. The fix was to stop trying to bind `sr4`/`psr` as pattern
+operands at all in these constructors and instead print them as bare literal display text
+(`"sr4"`, `"psr"`) while referencing the actual global `sr4`/`psr` registers directly by name
+in the p-code (which works fine — SLEIGH allows referencing any declared global register by
+name in p-code regardless of whether it's bound via the instruction pattern).
+
+### Known cosmetic limitation carried over (not newly introduced)
+
+The pre-existing `popsrmap`/(now also `pshsrmap`) recursive bitmap-list builder can render
+incorrectly — a dropped register, or an extra/missing separator — when two back-to-back
+instructions of this same family appear adjacent to each other during a forced linear sweep
+(confirmed on an already-shipped, previously-"working" `nibble 0x8` occurrence pair, e.g.
+`pop {retx,rete,reti}` immediately followed by `pop {rets,rete}` rendering as `pop
+{rete,reti}` then `pop {,retx,rete,reti}`). This looks like context-register state (`counter`/
+`bitset`/`sep`) not being fully reset between two uses of the same recursive table in adjacent
+instructions during Ghidra's forced/linear disassembly. It does **not** affect instruction
+length (the property this differential-testing methodology measures, and the reason the
+pre-existing `nibble 0x8` case was already counted as "OK" despite this bug), only cosmetic
+display text in that specific back-to-back adjacency case. Root-causing and fixing this
+context-reset issue in the underlying recursive-list-building idiom (shared by this family and
+the older group=7 `pshmap`/`popmap` register-bitmap machinery) is worth a dedicated follow-up,
+but was out of scope for closing the length-based gap count this round.
+
+## LEN_MISMATCH triage (38 addresses)
+
+All 38 `LEN_MISMATCH` addresses turned out to be **the same single root cause**: a real,
+currently-unmodeled 6-byte "wide-immediate compare-and-branch" instruction family (ground
+truth shows forms like `ifs (r6 > 2000) goto 322`, `if (r15 ?? -1) goto -2`, `ifs (r1 >= 1)
+goto -636`), sharing first bytes in the `0x00`-`0x0f`/`0x2c`-`0x2d` range. The current SLEIGH
+module misdecodes the same bytes as an unrelated, shorter 4-byte `or [rX+off],#imm` bitwise-or
+instruction — i.e. this isn't a subtly-wrong existing constructor so much as a genuinely
+different, wider comparison-branch encoding that happens to alias a valid but wrong decode of
+an existing constructor's pattern. This is the same family already flagged in the "Still open"
+list above under "wider-immediate comparison forms" (`if (r7 != 134217728)`, `ifs (r12 >
+33554944)`); triaging the `LEN_MISMATCH` bucket specifically confirmed it is *all* one family,
+not several unrelated bugs, and that the existing `or`-with-32-bit-immediate constructor's
+pattern is presumably too permissive (matching bytes it shouldn't). Modeling this properly
+would mean extending `pi32v2_ins_ifthenelse.sinc`'s if/then/else context-register state
+machine with a new wide-immediate comparison form and tightening or disambiguating it against
+the existing `or`-immediate constructor — real, scoped work, but a distinct task from the
+range-list fix above, and deferred for the same reason noted in earlier rounds (risk of
+destabilizing the existing if/then/else state machine without more targeted ground truth for
+that specific state machine's context transitions).
+
+## MISSING triage (7 addresses)
+
+All 7 `MISSING` addresses are **downstream artifacts of other, already-identified gap
+families** — none is an independent new bug:
+
+- One (`0x201b50a`) and two more (`0x204c432`, `0x204c434`) directly follow a `LEN_MISMATCH`
+  wide-immediate compare-branch instruction (see above) that Ghidra decoded 2 bytes short;
+  the following addresses land mid-instruction and never get a valid decode start.
+- Three (`0x204d544`, `0x2050dc8`, `0x205639e`) each directly follow a `BAD` decode in one of
+  the other still-open families noted above (the `(ssat,x2)`/parallel-multiply-accumulate DSP
+  family and a related 32-bit-immediate bitwise-op-on-memory form) — same cascading-desync
+  pattern.
+- One (`0x207615c`) follows a ground-truth-side `<unknown instruction>` line that the
+  `--unknown-window` proximity filter (default 6 ground-truth instructions) didn't quite reach
+  in this specific case; likely a real data/misaligned-region false positive rather than a
+  SLEIGH bug, consistent with the "Data-region false positives" methodology note further above.
+
+None of the 7 are independently fixable without first resolving the upstream family each one
+cascades from; no new constructor was added for this bucket as a result, but the triage itself
+is a useful result — it confirms there is no additional, as-yet-unidentified bug hiding in the
+`MISSING` count.
+
+## Files touched this round
+
+- `data/languages/pi32v2.slaspec` (no field/token changes needed; reused existing `ins0407`/
+  `ins0412`/`ins0003` fields)
+- `data/languages/pi32v2_ins_stack.sinc` (removed 2 superseded hardcoded constructors, added
+  ~30 new constructors and 2 new recursive bitmap tables for fix #8)
+- `data/languages/pi32v2.sla` (recompiled)
+
+## Non-invasive-first compliance (this round)
+
+Same as previous rounds: static analysis only, against a real firmware image and this fork's
+own SLEIGH module, with no MIDI, USB, or OTA/flash I/O performed or attempted at any point.

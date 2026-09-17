@@ -29,8 +29,9 @@ addresses at once instead of chasing one-off mismatches.
 |---|---|---|
 | Naive per-address test harness (harness bug, not a real baseline) | 8,966 | 95.7% |
 | Same SLEIGH module, correct batched/linear-sweep harness | 1,358 | 99.35% |
-| + first session's 3 targeted encoding fixes | 768 | 99.63% |
-| + second session's saturating-arithmetic/branch/load-store fixes | 405 | **99.78%** |
+| + first round's 3 targeted encoding fixes | 768 | 99.63% |
+| + second round's saturating-arithmetic/branch/load-store fixes | 405 | 99.78% |
+| + third round's multi-register range-list/special-register-list push/pop family | 309 | **99.83%** |
 
 Across both sessions, previously-undecoded `pi32v2` encoding families were identified and
 added, each verified against every real occurrence in the ground truth (not a sample) and,
@@ -56,6 +57,14 @@ snippets:
   `d[++rB=rC]`, and their negative-immediate/store-direction siblings) — the biggest single
   bucket of remaining gaps, resolved by extending the existing byte-family encoding pattern to
   its unimplemented sibling opcodes and to the analogous halfword/doubleword opcodes.
+- **A third round then added the multi-register "range-list" and "special-register-list"
+  `[--sp]={...}` / `{...}=[sp++]` push/pop family** (`[--sp]={r10-r4}`, `{rets,r3-r1}=[sp++]`,
+  `[--sp]={psr,sr4,rets,rete,reti}`, and every other combination in that opcode nibble) —
+  ~100 addresses, closed by extending an existing-but-partial bitmap/range-list constructor
+  scheme to its full, previously only partially-covered domain. This was the multi-register
+  push/pop syntax noted as an open, higher-effort item in earlier rounds; see the gap-analysis
+  doc for the full bitfield derivation and a couple of known cosmetic-only display quirks that
+  remain in that constructor family.
 
 Full derivation, confidence levels, and the remaining (lower-impact, harder) open gaps are
 documented in [`tools/gap-analysis/PI32V2_SLEIGH_GAPS.md`](tools/gap-analysis/PI32V2_SLEIGH_GAPS.md).
@@ -83,7 +92,7 @@ paths, so it works against any target firmware, not just the one this fork was b
 - dv10 *(this is Blackfin, not implemented)*
 - dv12 *(this is Blackfin, not implemented)*
 - pi32 *(not complete, but somewhat usable — untouched by this fork)*
-- **pi32v2** *(99.78% instruction-match rate against real firmware ground truth — see above;
+- **pi32v2** *(99.83% instruction-match rate against real firmware ground truth — see above;
   a handful of lower-impact encoding families still open, see the gap-analysis doc)*
 - q32s *(very early stage — untouched by this fork)*
 - f59 *(not implemented yet)*
@@ -98,10 +107,12 @@ paths, so it works against any target firmware, not just the one this fork was b
   - Maybe refactor the mnemonics? (like the ones used on q32s and pi32v2? or do it the other way around?)
   - Change flags on instructions that change them (e.g. add, sub, rotc, etc.)
 - pi32v2
-  - Remaining missing instructions (multi-register push/pop range-list syntax `[--sp]={rX-rY}`,
-    register-operand shift/divide ops sharing a `0xd8`/`0xf6` first byte, several `ifs`/`if`
-    comparison variants, a `(ssat,x2)` SIMD multiply-accumulate family, `sspn`/`wfe`/`callns`
-    and a few other single/double-byte opcodes — see the gap-analysis doc)
+  - Remaining missing instructions (a second, pre-decrement-addressed multi-register list
+    encoding distinct from the range-list family already implemented, register-operand
+    shift/divide ops sharing a `0xd8`/`0xf6` first byte, several `ifs`/`if` comparison variants
+    including a wide-immediate compare-and-branch family responsible for essentially all of the
+    current `LEN_MISMATCH` count, a `(ssat,x2)` SIMD multiply-accumulate family, `sspn`/`wfe`/
+    `callns` and a few other single/double-byte opcodes — see the gap-analysis doc)
   - Mnemonics like in q32s or pi32?
 - q32s
   - Do the rest:
