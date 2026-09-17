@@ -514,6 +514,33 @@
         goto jaddr16e;
 }
 
+#
+# ifs (rA >= imm12) goto pcrel16sm2
+#
+# Confirmed against real firmware (e.g. "ifs (r1 >= 1) goto -636"): this
+# opcode slot (ins0012=0x1f0a) was previously unimplemented in this
+# constructor family, which meant the real 6-byte encoding was being
+# swallowed by the unrelated, shorter 4-byte "or [rX+off],#imm" bitwise-or
+# constructor's overly permissive pattern instead.
+#
+:jge eregA, #imm1627, jaddr16e is group=7 & ins0012=0x1f0a ; eregA & imm1627 ; jaddr16e
+{
+    if (eregA s>= imm1627)
+        goto jaddr16e;
+}
+
+#
+# ifs (rA > imm12) goto pcrel16sm2
+#
+# Confirmed against real firmware (e.g. "ifs (r6 > 2000) goto 322"), same
+# previously-unimplemented-opcode-slot situation as ins0012=0x1f0a above.
+#
+:jg eregA, #imm1627, jaddr16e is group=7 & ins0012=0x1f0c ; eregA & imm1627 ; jaddr16e
+{
+    if (eregA s> imm1627)
+        goto jaddr16e;
+}
+
 
 ##
 # Unsigned conditional jumps (register/register/pcrel16sm2)

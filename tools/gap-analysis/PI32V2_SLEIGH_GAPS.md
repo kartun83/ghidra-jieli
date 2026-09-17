@@ -396,32 +396,32 @@ existing byte family already gave a confirmed field-layout template to extend):
 above except the explicitly-noted "not added" store/negative counterparts); each formula was
 checked against every real occurrence found for that specific opcode slot, not a sample.
 
-## Still open (not fixed this session)
+## Still open (updated after the third and fourth rounds; see those sections below for what
+## has since been resolved)
 
 Ranked by remaining real-firmware address count in the final diff:
 
-- **Multi-register push/pop range-list syntax**, e.g. `[--sp] = {r3-r0}`, `{psr, rets} =
-  [sp++]`, `[--sp] = {sp, ssp, usp, icfg, psr, rets, retx, rete, reti}` (first bytes
-  `0x60`/`0x6a`/`0x6c`/`0x6d`/`0xc0`/`0xc8`/`0xcb`/`0xd2`/`0xd9`/`0xdb`/`0xe0`/`0xe8`/`0xef`/
-  `0xfd`/`0xa8`/`0xb1`, roughly 60 addresses combined) — the existing `WriteRegs`/`ReadRegs`
-  bitmap-based push/pop machinery in `pi32v2_ins_loadstore.sinc` handles an explicit bitmap of
-  arbitrary registers, but not this contiguous-range (`{rX-rY}`) or named-special-register-list
-  display syntax; likely a separate, syntactically different encoding rather than a variant of
-  the existing bitmap form, needs its own investigation.
+- ~~Multi-register push/pop range-list syntax~~ — **resolved in the third round**, see
+  "Fix #8" below.
+- ~~Wide-immediate signed compare-and-branch (`ifs ... s>=`/`s>`)~~ — **resolved in the
+  fourth round**, see "Fix #9" below.
 - **Register-operand shift and 64-bit divide op families** sharing first bytes `0xd8`
   (`r3_r2 >>= r10`, `r5_r4 <<= r1`, `r1_r0 >>>= 63`, ~26 addresses) and `0xf6`
   (`r3_r2 = r1_r0 / r4 (u)`, `r7_r6 = r3_r2 / r5 (u)`, ~18 addresses) — paired-register
   shift-by-register and 64-bit-by-32-bit divide ops, not yet modeled.
-- **A `(ssat,x2)` parallel SIMD multiply-accumulate-subtract family**, e.g.
-  `r3_r2 -= r6.h,r6.h *|* r15.l,r15.l (ssat,x2)` (first byte `0x73`, ~6 addresses) — related to
-  but distinct from the `sadd.sat` fix above; a wider DSP instruction family that overlaps with
-  the `SIMD_QADD32S`/`SIMD_QSUB32S`-adjacent pattern names found in the toolchain's `clang`
-  binary (see fix #6) but not reached by any C idiom tried.
-- Several `if`/`ifs` register-comparison variants (first bytes `0x0c`, `0x10`, `0xb0`, `0xb1`,
-  `0xb4`, `0x15`, `0x90`/`0x94`/`0x98`/`0x2c`-with-fixed-second-word, ~70 addresses combined) —
-  a mix of what look like wider-immediate comparison forms (`if (r7 != 134217728)`,
-  `ifs (r12 > 33554944)`) and short register/register comparisons not yet in
-  `pi32v2_ins_ifthenelse.sinc`/`pi32v2_ins_progflow.sinc`.
+- **A dual-register (`rH_rL`) multiply-accumulate-subtract form of the `(ssat,x2)` modifier**,
+  e.g. `r3_r2 -= r6.h,r6.h *|* r15.l,r15.l (ssat,x2)` (first bytes `73 f5`, 5 real addresses
+  across only 2 distinct byte patterns) — see the fourth round's write-up below for why this
+  specific sub-case (not the `(ssat,x2)` modifier in general, which is now understood and
+  mostly already handled) remains unresolved: too few distinct real instances to unambiguously
+  separate the destination-register, source-register, and lane-selector bit fields.
+- Several `if`/`ifs` **register/register** comparison variants (first bytes `0x10`, `0xb0`,
+  `0xb1`, `0xb4`, `0x15`, `0x90`/`0x94`/`0x98`/`0x2c`-with-fixed-second-word, ~40 addresses
+  combined) — a different, shorter encoding family than the wide-immediate one resolved in the
+  fourth round; ground truth shows these printed with a trailing `{ ... }` (e.g.
+  `ifs (r0 > r2) {`), suggesting they belong to the `if...then...else` context-register state
+  machine in `pi32v2_ins_ifthenelse.sinc` rather than the flat compare-and-branch family in
+  `pi32v2_ins_progflow.sinc` — not yet investigated.
 - A handful of miscellaneous single/double-byte opcodes seen only 1-4 times each: `sspn = sp`
   (`0x47 0x14`), `wfe` (`0x44 0x00`), `ssync` (`0x32 0x00`, a *different* encoding from the
   already-implemented `ssync`), `trigger` (`0x70 0xe8 0x00 0x00`), `callns r12`/`r13`/`r14`/
@@ -429,10 +429,6 @@ Ranked by remaining real-firmware address count in the final diff:
   base opcode), and a small `sp` post-increment double-load `r5 = [r0++=-16]`
   (`df ec 00 5f`) — each too infrequent (1-4 real occurrences) to be worth prioritizing over
   the bigger buckets above, but individually cheap if revisited.
-- The 38 `LEN_MISMATCH` and 7 `MISSING` addresses were still not individually triaged this
-  session either — carried over from the previous session's open item, still worth a
-  dedicated follow-up pass since length mismatches can point to subtly wrong (not just
-  missing) constructors.
 - No store-direction sibling was added for the halfword extended-range/negative pre-increment
   forms (`0xd59`/`0xd5b`/`0xd5d`) or the doubleword register-preincrement form (`0xC5C`
   store, `imm1617=3`) — plausible by analogy with their load counterparts and other
@@ -605,3 +601,103 @@ is a useful result — it confirms there is no additional, as-yet-unidentified b
 
 Same as previous rounds: static analysis only, against a real firmware image and this fork's
 own SLEIGH module, with no MIDI, USB, or OTA/flash I/O performed or attempted at any point.
+
+---
+
+# Fourth round: wide-immediate compare-and-branch family, cross-checked against a community ISA reference
+
+Scope: same as previous rounds (static analysis only, real-firmware ground truth plus the
+batched-linear-sweep Ghidra headless harness). This round's starting point was a third-party,
+community-maintained pi32v2 opcode reference (<https://kagaimiq.github.io/jielie/cpu/pi32v2.html>),
+used strictly as a hypothesis source to validate against this project's own real-firmware
+ground truth and toolchain — not trusted as-is.
+
+## Results this round
+
+| Stage | BAD | LEN_MISMATCH | MISSING | Total gap addrs | Match rate |
+|---|---|---|---|---|---|
+| Start of this round (re-measured against the same tooling/ground truth) | 264 | 38 | 7 | 309 | 99.83% |
+| + wide-immediate signed compare-and-branch, `s>=`/`s>` conditions (fix #9) | 260 | 11 | 6 | **277** | **99.87%** |
+
+Final state: **99.87%** of real (non-data-region, non-`<unknown instruction>`) ground-truth
+instructions decode with matching length, up from 99.83% at the end of the previous round.
+
+## Resolving the byte-count discrepancy from the previous round
+
+The previous round's `LEN_MISMATCH` triage described this family as a "6-byte wide-immediate
+compare-and-branch" encoding. The community reference above independently proposes a *different*
+encoding for what looks like the same kind of instruction: a compact 32-bit (2-word) form with a
+first byte in the 0xF8-0xFD range. Before trusting either description, both were checked directly
+against real ground-truth bytes for the same address (e.g. the instruction printed as
+`ifs (r6 > 2000) goto 322`): the actual bytes are 6 bytes long (3 sixteen-bit words), confirming
+the previous round's own finding and ruling out the community reference's 32-bit form for this
+specific instruction family in this firmware. The community reference turned out to describe a
+related but distinct/unverified encoding, not applicable here as-is — exactly the outcome the
+"treat it as a hypothesis, not an authority" approach is meant to catch.
+
+## Fix #9: wide-immediate signed compare-and-branch, `s>=`/`s>` conditions (32 addresses)
+
+By hand-decoding roughly 40 real occurrences of this instruction family across every condition
+code that appears in the ground truth (equality, unsigned/signed relational, register-vs-register,
+and bitwise-and-test variants), the actual 48-bit encoding was fully confirmed:
+
+- Word 0: a fixed marker byte (`0xFF`) in the high half, with the low byte selecting the specific
+  condition/mode (a 7-bit code: bits 0-4 select the condition, bits 5-6 select immediate vs.
+  wide-immediate vs. register-vs-register vs. bitwise-and-test mode).
+- Word 1: register field in the high nibble of the high byte, and a 12-bit immediate (or second
+  register, or bitmask, depending on mode) split across the rest of the word.
+- Word 2: a signed 16-bit branch displacement, scaled by 2.
+
+This exact encoding was already anticipated by this SLEIGH module's existing token/subtable
+infrastructure (a whole `ins0012=0x1fXX`-keyed constructor family already existed, built on
+already-declared `imm1627`/`packedimm12`/`eregA`/`eregC`/`jaddr16e` fields and subtables), and
+most condition codes in this family were already correctly implemented. Two specific opcode
+slots were simply missing outright: `ins0012=0x1f0a` (signed `>=`) and `ins0012=0x1f0c`
+(signed `>`). With no constructor claiming those two bit patterns, the real 6-byte instructions
+at those addresses were instead being incorrectly matched — at the wrong, shorter length — by an
+unrelated, more permissive 4-byte `or [rX+off],#imm` constructor, which is exactly the
+`LEN_MISMATCH` symptom the previous round observed. Adding the two missing constructors
+(mirroring the existing, already-correct `ins0012=0x1f0b`, signed `<`, constructor immediately
+next to them) resolved every real occurrence of both conditions with no regressions elsewhere.
+
+**Confidence: high.** Verified against every real ground-truth occurrence of both condition
+codes (not a sample), using the same 12-bit-immediate/register/branch-displacement decoding that
+already checks out exactly against roughly 40 other real occurrences across every other
+condition in the same instruction family.
+
+## Corrected understanding of the `(ssat,x2)`/`(usat,x2)` modifier (no fix yet)
+
+The previous round's "still open" note described this as a "SIMD multiply-accumulate family."
+The community reference above shows this framing was too narrow: `(ssat,x2)`/`(usat,x2)` is a
+generic saturation-variant modifier that appears as a sibling encoding across an entire cluster
+of parallel-arithmetic operations — plain add, dual-add, quad-add, multiply, multiply-accumulate,
+and dual-multiply all have their own `plain`/`usat`/`ssat`/`usat,x2`/`ssat,x2`/`uavg`/`savg`/
+`rnd,uavg`/`rnd,savg` sibling opcodes selected by a small, consistently-placed bit field. It is
+not specific to multiply-accumulate and not a SIMD/dual-lane concept as such.
+
+This correction doesn't close any gaps by itself — all real firmware occurrences of this
+modifier across *other* arithmetic shapes (plain dual-subtract, quad add/subtract, single-lane
+multiply) already decode with the correct length via existing constructors; only one specific
+sub-case remains an actual gap: a dual-register (`rH_rL`) multiply-accumulate-subtract form
+(first bytes `73 f5`, e.g. `r3_r2 -= r6.h,r6.h *|* r15.l,r15.l (ssat,x2)`), 5 real occurrences
+across only 2 distinct byte patterns. That's too little independent data to pin down the exact
+bit boundaries between the destination register pair, the two source registers, and the lane
+selectors with confidence — the two available raw encodings differ by a single bit in a
+position that could plausibly belong to any of those fields. Per this project's "don't force a
+low-confidence Ghidra fix" rule, this stays documented as open rather than patched; closing it
+for real would need either more real-firmware instances of this exact sub-case (from this or
+another pi32v2 firmware image) or a working synthetic-compilation reproducer, which was already
+attempted in the second round without success.
+
+## Files touched this round
+
+- `data/languages/pi32v2_ins_progflow.sinc` (2 new constructors: fix #9)
+- `data/languages/pi32v2.sla` (recompiled)
+
+## Non-invasive-first compliance (this round)
+
+Same as previous rounds: static analysis only, against a real firmware image and this fork's
+own SLEIGH module, with no MIDI, USB, or OTA/flash I/O performed or attempted at any point. The
+community ISA reference was consulted read-only over HTTP as public documentation and was not
+trusted without independent verification against real firmware bytes, consistent with the
+"treat it as a hypothesis, not ground truth" approach used throughout this round.

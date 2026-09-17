@@ -31,13 +31,18 @@ addresses at once instead of chasing one-off mismatches.
 | Same SLEIGH module, correct batched/linear-sweep harness | 1,358 | 99.35% |
 | + first round's 3 targeted encoding fixes | 768 | 99.63% |
 | + second round's saturating-arithmetic/branch/load-store fixes | 405 | 99.78% |
-| + third round's multi-register range-list/special-register-list push/pop family | 309 | **99.83%** |
+| + third round's multi-register range-list/special-register-list push/pop family | 309 | 99.83% |
+| + fourth round's wide-immediate signed compare-and-branch fix | 277 | **99.87%** |
 
-Across both sessions, previously-undecoded `pi32v2` encoding families were identified and
+Across all four rounds, previously-undecoded `pi32v2` encoding families were identified and
 added, each verified against every real occurrence in the ground truth (not a sample) and,
 where real occurrences were too sparse to pin an encoding confidently, cross-checked against
 clean output from the real JieLi `clang`/`objdump` toolchain compiling small targeted C
-snippets:
+snippets. The fourth round additionally cross-checked a community-maintained pi32v2 opcode
+reference (<https://kagaimiq.github.io/jielie/cpu/pi32v2.html>) as a hypothesis source, not an
+authority — one of its two candidate encodings didn't match this firmware's real bytes and was
+discarded after verification, while the other correctly pointed at two missing opcode slots in
+an instruction family this module had already mostly implemented:
 
 - **Register-indexed post-increment load/store** (`[rB ++= rC]`, word/halfword/byte) — the
   single largest gap, ~3,000+ addresses, a very common addressing mode in compiler-generated
@@ -65,6 +70,12 @@ snippets:
   push/pop syntax noted as an open, higher-effort item in earlier rounds; see the gap-analysis
   doc for the full bitfield derivation and a couple of known cosmetic-only display quirks that
   remain in that constructor family.
+- **A fourth round closed the wide-immediate signed compare-and-branch family**
+  (`ifs (rX >= imm) goto ...` / `ifs (rX > imm) goto ...`) — 32 addresses, fixed by adding two
+  opcode slots (signed `>=` and `>`) that were simply missing from an otherwise-complete,
+  already-implemented 48-bit compare-and-branch instruction family. Real firmware bytes at
+  those addresses were previously being mismatched against an unrelated, shorter 4-byte
+  bitwise-or instruction.
 
 Full derivation, confidence levels, and the remaining (lower-impact, harder) open gaps are
 documented in [`tools/gap-analysis/PI32V2_SLEIGH_GAPS.md`](tools/gap-analysis/PI32V2_SLEIGH_GAPS.md).
@@ -92,7 +103,7 @@ paths, so it works against any target firmware, not just the one this fork was b
 - dv10 *(this is Blackfin, not implemented)*
 - dv12 *(this is Blackfin, not implemented)*
 - pi32 *(not complete, but somewhat usable — untouched by this fork)*
-- **pi32v2** *(99.83% instruction-match rate against real firmware ground truth — see above;
+- **pi32v2** *(99.87% instruction-match rate against real firmware ground truth — see above;
   a handful of lower-impact encoding families still open, see the gap-analysis doc)*
 - q32s *(very early stage — untouched by this fork)*
 - f59 *(not implemented yet)*
@@ -109,10 +120,11 @@ paths, so it works against any target firmware, not just the one this fork was b
 - pi32v2
   - Remaining missing instructions (a second, pre-decrement-addressed multi-register list
     encoding distinct from the range-list family already implemented, register-operand
-    shift/divide ops sharing a `0xd8`/`0xf6` first byte, several `ifs`/`if` comparison variants
-    including a wide-immediate compare-and-branch family responsible for essentially all of the
-    current `LEN_MISMATCH` count, a `(ssat,x2)` SIMD multiply-accumulate family, `sspn`/`wfe`/
-    `callns` and a few other single/double-byte opcodes — see the gap-analysis doc)
+    shift/divide ops sharing a `0xd8`/`0xf6` first byte, a handful of shorter register/register
+    `ifs`/`if` comparison variants distinct from the wide-immediate family already implemented,
+    one narrow dual-register multiply-accumulate-subtract sub-case of the (otherwise mostly
+    handled) `(ssat,x2)` saturation modifier, `sspn`/`wfe`/`callns` and a few other
+    single/double-byte opcodes — see the gap-analysis doc)
   - Mnemonics like in q32s or pi32?
 - q32s
   - Do the rest:
