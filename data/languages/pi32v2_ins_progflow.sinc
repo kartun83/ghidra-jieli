@@ -846,6 +846,18 @@
         goto jaddr16e;
 }
 
+:jg eregA, #packedimm12, jaddr16e is group=7 & ins0012=0x1f2c ; eregA & packedimm12 ; jaddr16e
+{
+    if (eregA s> packedimm12)
+        goto jaddr16e;
+}
+
+:jbe eregA, #packedimm12, jaddr16e is group=7 & ins0012=0x1f2d ; eregA & packedimm12 ; jaddr16e
+{
+    if (eregA s<= packedimm12)
+        goto jaddr16e;
+}
+
 ###########################################################################################
 # Code repeat     ( Impossible to implement? )
 ###########################################################################################

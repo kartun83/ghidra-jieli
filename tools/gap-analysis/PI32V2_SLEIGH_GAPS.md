@@ -1724,3 +1724,110 @@ the bit source instead of `msregread`/`imm0003`), plus the two top-level constru
 New vendor-assembler invocations (local, read-only besides writing throwaway `.o` files under
 `/tmp`) to test byte-encoding hypotheses, a `sleigh` recompile, and headless Ghidra re-imports of
 already-unpacked local firmware images. No MIDI, USB, or OTA/flash I/O at any point.
+
+## Fourteenth round: closed the signed `packedimm12` compare-and-branch family's two remaining slots
+
+Following on from the thirteenth round's assembler discovery, this round used the same
+`clang -target pi32v2 -x assembler` capability to systematically probe the wide-immediate
+compare-and-branch family (`data/languages/pi32v2_ins_progflow.sinc`) instead of just testing a
+single hypothesis.
+
+### Method
+
+Assembled every `if`/`ifs (r0 <op> 2047) goto label` combination (`==`,`!=`,`<`,`<=`,`>`,`>=`,
+both `if` and `ifs`) with a deliberately non-round immediate (2047, chosen to defeat the
+`packedimm12` compact encoding the same way the thirteenth round's notes describe) and recorded
+the resulting `ins0012` opcode nibble for each. This confirmed, exhaustively rather than by
+single example, that this assembler's relational-comparison syntax reaches exactly the condition
+nibbles this module already implements (`eq`,`ne`,`u>=`,`u<`,`u>`,`u<=`,`s>=`,`s<`,`s>`,`s<=`) and
+none of the tracked-missing flag-condition slots (`0x1f04`-`0x1f07`, `0x1f0f`) — a stronger,
+complete-mapping version of the thirteenth round's negative result for that gap (still correctly
+left unresolved, see above).
+
+Along the way, varying the immediate's magnitude/roundness for the same `ifs (r0 <= ...)` case
+surfaced a second, independent opcode nibble carrying the same condition: a "round"/packable
+immediate (e.g. 2048) assembles through `ins0012=0x1f2d` rather than `0x1f0d`. Cross-checking that
+prefix against this project's own ground-truth corpus (`~/dev/keysmith/research/disasm/*.txt`,
+several real firmware images already unpacked from earlier rounds) turned up a real occurrence:
+
+```
+205ea14:  2d ff 1c 17 03 00   ifs (r1 <= 40894464) goto 6 <.text+0x5E900 : 205ea20 >
+```
+
+This is the same already-documented "`0x2c`/`0x2d` prefix" collision this doc's twelfth-round
+section flagged (`ifs (r1 > 1056964608) goto 8` → `2c ff 7c 15 04 00`, misdecoded as an unrelated
+4-byte `or [r1+#0xb0],#0x3f000000`) — not a new hypothesis, but now with independent assembler
+confirmation of both slots:
+
+```
+$ echo 'ifs (r1 > 1056964608) goto lbl' | clang -target pi32v2 -x assembler -c -o t.o -
+$ objdump -d t.o
+   0:  2c ff 7c 15 01 00   ifs (r1 > 1056964608) goto 2 <lbl : 8>
+```
+
+```
+$ echo 'ifs (r1 <= 40894464) goto lbl' | clang -target pi32v2 -x assembler -c -o t.o -
+$ objdump -d t.o
+   0:  2d ff 1c 17 01 00   ifs (r1 <= 40894464) goto 2 <lbl : 8>
+```
+
+Both reproduce their respective real-firmware byte patterns exactly (word1's immediate-encoding
+bytes match byte-for-byte; only the branch-displacement word differs, as expected from a
+different label distance). Unlike the flag-condition gap, this is a plain relational comparison
+against the embedded immediate (`s>` / `s<=`) — the exact same semantics as the already-implemented
+`0x1f2a` (`s>=`) and `0x1f2b` (`s<`) siblings in the same `ins0012=0x1f2X` `packedimm12` opcode
+group, just two condition nibbles (`0x2c`, `0x2d`) that were simply never given constructors. Safe
+to fix the same way the `0x1f0a`/`0x1f0c` gap was fixed in an earlier round.
+
+### Fix
+
+Added two constructors to `pi32v2_ins_progflow.sinc`, mirroring the existing `0x1f2a`/`0x1f2b`
+siblings exactly:
+
+```sleigh
+:jg eregA, #packedimm12, jaddr16e is group=7 & ins0012=0x1f2c ; eregA & packedimm12 ; jaddr16e
+{
+    if (eregA s> packedimm12)
+        goto jaddr16e;
+}
+
+:jbe eregA, #packedimm12, jaddr16e is group=7 & ins0012=0x1f2d ; eregA & packedimm12 ; jaddr16e
+{
+    if (eregA s<= packedimm12)
+        goto jaddr16e;
+}
+```
+
+Note this `0x1f2d` slot is distinct from the already-implemented `0x1f0d` constructor a few lines
+above (also `s<=`) — real firmware uses both, apparently selected by which `packedimm12`
+sub-encoding the immediate's magnitude/shape needs, mirroring how the unsigned family already
+splits its own conditions across `0x1f0X`/`0x1f2X`.
+
+### Verification
+
+- Rebuilt (`sleigh pi32v2.slaspec`), clean compile, no new warnings.
+- Manually decoded both real byte patterns (`2c ff 7c 15 01 00`, `2d ff 1c 17 01 00`) through
+  Ghidra headless: both now produce the correct immediate (`0x3f000000` / `0x2700000`, matching
+  the assembler-confirmed decimal values exactly) at the correct 6-byte length.
+- Re-ran the full ground-truth-vs-Ghidra diff against three real firmware images: the project's
+  original baseline (56 → 54 gap addresses) and the two other real images already unpacked from
+  earlier rounds (75 → 72, and 109 → 106). Zero regressions on any of the three; no new gap
+  categories introduced; no previously-fixed address (including the thirteenth round's
+  special-register bitmap push at `0x020001d0`) broke.
+- One methodology note worth recording: an early regression-looking result (the thirteenth
+  round's special-register push appearing to fail after this round's `.sinc` change) turned out
+  to be a stale Ghidra language-cache artifact — the same `.o`/dump byte sequence decoded
+  correctly once re-imported into a fresh Ghidra project after reinstalling the `.sla`. Anyone
+  reproducing this pipeline and seeing an inexplicable regression immediately after a SLEIGH
+  recompile should re-run with a fresh project directory before trusting the result.
+
+### Files touched this round
+
+- `data/languages/pi32v2_ins_progflow.sinc` (two new constructors, `ins0012=0x1f2c`/`0x1f2d`)
+- `data/languages/pi32v2.sla` (recompiled)
+
+### Non-invasive-first compliance (this round)
+
+New vendor-assembler invocations (local, read-only besides throwaway `.o` files), a `sleigh`
+recompile, and headless Ghidra re-imports of already-unpacked local firmware images plus one
+already-existing ground-truth text corpus. No MIDI, USB, or OTA/flash I/O at any point.

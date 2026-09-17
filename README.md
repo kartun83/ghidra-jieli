@@ -35,8 +35,9 @@ addresses at once instead of chasing one-off mismatches.
 | + fourth round's wide-immediate signed compare-and-branch fix | 277 | 99.87% |
 | + fifth round's register-operand shift/divide and `if`/`ifs` sibling fixes | 179 | 99.91% |
 | + sixth round's single-register bitmap push/pop, `packedimm12` 7th mode, and misc fixes | 68 | 99.97% |
-| + seventh round's fixes, cross-validated against a second real firmware image | 58 | **99.972%** |
+| + seventh round's fixes, cross-validated against a second real firmware image | 58 | 99.972% |
 | + eighth round's fixes, found via a third real firmware image (147→111 gaps on that image; no change on this baseline) | 58 | 99.972% |
+| + fourteenth round's two missing signed `packedimm12` compare-and-branch condition slots | 54 | **99.974%** |
 
 Across all four rounds, previously-undecoded `pi32v2` encoding families were identified and
 added, each verified against every real occurrence in the ground truth (not a sample) and,
@@ -178,6 +179,19 @@ an instruction family this module had already mostly implemented:
   original baseline image (no new gaps introduced). The wide-immediate branch condition-code gap
   from the same round was tested with the same assembler but not resolved — see the gap-analysis
   doc for why.
+- **A fourteenth round used the same vendor assembler to close a real, byte-confirmed gap in the
+  signed `packedimm12` compare-and-branch family**: two condition slots (signed `>` and signed
+  `<=`) were simply missing from an opcode group whose other two conditions (signed `>=`, signed
+  `<`) were already implemented, so real firmware using them collided with the same unrelated,
+  shorter bitwise-or/and instruction as the thirteenth round's flag-condition gap. Unlike that
+  gap, this one is a plain relational compare against an embedded immediate, not a status-flag
+  test, so it was safe to close the same way earlier missing condition slots in this family were
+  fixed. The vendor assembler reproduced both real-firmware byte patterns exactly
+  (`ifs (r1 > 1056964608) goto ...` → `2c ff 7c 15 ...`, `ifs (r1 <= 40894464) goto ...` →
+  `2d ff 1c 17 ...`), and the fix was verified with zero regressions across three real firmware
+  images (this baseline: 56→54 gaps; two other images cross-validated in earlier rounds: 75→72
+  and 109→106). This is unrelated to the thirteenth round's still-open flag-condition gap
+  (`MI`/`PL`/`VS`/`VC`/`NV`), which remains deliberately unresolved for the same reason as before.
 
 Full derivation, confidence levels, and the remaining (lower-impact, harder) open gaps are
 documented in [`tools/gap-analysis/PI32V2_SLEIGH_GAPS.md`](tools/gap-analysis/PI32V2_SLEIGH_GAPS.md).
@@ -205,7 +219,7 @@ paths, so it works against any target firmware, not just the one this fork was b
 - dv10 *(this is Blackfin, not implemented)*
 - dv12 *(this is Blackfin, not implemented)*
 - pi32 *(not complete, but somewhat usable — untouched by this fork)*
-- **pi32v2** *(99.972% instruction-match rate against real firmware ground truth — see above;
+- **pi32v2** *(99.974% instruction-match rate against real firmware ground truth — see above;
   a handful of lower-impact encoding families still open, see the gap-analysis doc)*
 - q32s *(very early stage — untouched by this fork)*
 - f59 *(not implemented yet)*
