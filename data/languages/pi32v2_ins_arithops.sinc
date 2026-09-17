@@ -335,6 +335,23 @@
     eregA = eregB s/ eregC;
 }
 
+#
+# rA_rB = rC_rD / rE (unsigned, 64-bit dividend/result, single-register divisor)
+#
+# Separate opcode slot (ins0011=0x1f6) from the 32-bit div/div.s pair above.
+# Field layout confirmed against all 17 real ground-truth occurrences: edregA
+# (bits 29-31) is the destination pair, edregB (bits 21-23) the dividend
+# pair, eregC (bits 24-27) the single-register divisor; bit 20 (imm2020, new
+# field -- no prior name existed for this single bit) and bit 12 (imm2828)
+# are always 0 in every sample and are pinned rather than left unconstrained.
+# Only the unsigned form appears anywhere in ground truth (no signed
+# counterpart is added).
+#
+:div edregA, edregB, eregC is group=7 & ins0011=0x1f6 ; edregA & eregC & edregB & imm2828=0 & imm2020=0 & imm1619=0
+{
+    edregA = edregB / zext(eregC);
+}
+
 
 ###########################################################################################
 # Absolute value

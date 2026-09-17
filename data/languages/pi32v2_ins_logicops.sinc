@@ -277,8 +277,20 @@
     # Create a bitmask for our source register
     smask = (dmask << imm2327) & 0xffffffff;
 
-    # Extract register bits into target register
-    regA = sext((eregA & smask) >> imm2327);
+    # Extract register bits into target register, sign-extended from the
+    # extracted field's own top bit (imm1822-1), not from regA's.
+    #
+    # sext() on this line used to be a silent no-op: both operands are
+    # already 4-byte varnodes (eregA and regA), so it degraded to a copy
+    # (flagged by the SLEIGH compiler as an unnecessary extension) and the
+    # field's sign bit was never actually propagated into the high bits.
+    # Fixed with the standard shift-left-then-arithmetic-shift-right
+    # bitfield sign-extend idiom instead: dmask is reused here purely as
+    # scratch space for the shift amount (32 - length), unrelated to its
+    # earlier use above as a length-bit mask.
+    dmask = 32 - imm1822;
+    regA = ((eregA & smask) >> imm2327) << dmask;
+    regA = regA s>> dmask;
 }
 
 # Reverse register by nibbles of 8 bits

@@ -46,9 +46,14 @@
 }
 
 #
-# if (rA != #imm1623) then { ... } else { ... }
+# if (rA != #packedimm12) then { ... } else { ... }
 #
-:if (regA != #imm1623) { is group=7 & ins0411=0x8B & regA ; imm2427=0 & imm1623 & ifcnt & elsecnt
+# Sibling of "if (regA == #packedimm12)" above (0x82) -- ins0411=0x8A was
+# unused, confirmed against real ground truth (e.g. "if (r3 != 16320)",
+# "if (r7 != 134217728)": values outside the plain-byte range that only
+# packedimm12's compressed/shifted forms can represent).
+#
+:if (regA != #packedimm12) { is group=7 & ins0411=0x8A & regA ; packedimm12 & ifcnt & elsecnt
 [
     # Save instructions count for then and else branches
     thenbranch=ifcnt+1; globalset(inst_next, thenbranch);
@@ -57,7 +62,34 @@
     ifblock=1; globalset(inst_next, ifblock);
 ]
 {
-    if (regA == imm1623) goto <else>;
+    if (regA == packedimm12) goto <else>;
+    cres=1;
+    goto <end>;
+
+<else>
+    cres=0;
+<end>
+}
+
+#
+# if (rA != #imm1627s) then { ... } else { ... }
+#
+# This used to be scoped to "imm2427=0 & imm1623" (i.e. only the low byte of
+# the 12-bit field, forcing the high nibble to 0) -- too narrow: real
+# ground truth has this same ins0411=0x8B slot carrying values like -1, -97
+# that need the full signed 12-bit field. Symmetric with "if (regA ==
+# #imm1627s)" above (0x83), which was never restricted this way.
+#
+:if (regA != #imm1627s) { is group=7 & ins0411=0x8B & regA ; imm1627s & ifcnt & elsecnt
+[
+    # Save instructions count for then and else branches
+    thenbranch=ifcnt+1; globalset(inst_next, thenbranch);
+    elsebranch=elsecnt; globalset(inst_next, elsebranch);
+
+    ifblock=1; globalset(inst_next, ifblock);
+]
+{
+    if (regA == imm1627s) goto <else>;
     cres=1;
     goto <end>;
 
@@ -278,6 +310,32 @@
 }
 
 #
+# if (rA < imm16) { ... } else { ... }
+#
+# Sibling of "if (regA >= imm1627)" above (0x93) -- ins0411=0x9B was unused,
+# confirmed against real ground truth ("if (r2 < 20)", "if (r0 < 253)",
+# "if (r0 < 10)", "if (r1 < 129)": all decode cleanly as plain unsigned
+# imm1627, no packedimm12 involvement in any real occurrence).
+#
+:if (regA < imm1627) { is group=7 & ins0411=0x9B & regA ; imm1627 & ifcnt & elsecnt
+[
+    # Save instructions count for then and else branches
+    thenbranch=ifcnt+1; globalset(inst_next, thenbranch);
+    elsebranch=elsecnt; globalset(inst_next, elsebranch);
+
+    ifblock=1; globalset(inst_next, ifblock);
+]
+{
+    if (regA >= imm1627) goto <else>;
+    cres=1;
+    goto <end>;
+
+<else>
+    cres=0;
+<end>
+}
+
+#
 # if (rA >= #packedimm12) { ... } else { ... }
 #
 :if (regA >= #packedimm12) { is group=7 & ins0411=0x92 & regA ; packedimm12 & ifcnt & elsecnt
@@ -361,7 +419,34 @@
 <end>
 }
 
-# 
+#
+# ifs (rA > rB) then { ... } else { ... }
+#
+# Missing slot in the otherwise-complete signed register-register comparison
+# family above (>=, <=, < already present at 0xD1/0xE9/0xD9) -- ins0411=0xE1
+# was unused, confirmed against every real ground-truth occurrence (9
+# addresses, regA always r0 in this firmware but decoded as a normal field
+# like every sibling constructor, not hardcoded).
+#
+:ifs (regA > eregC) { is group=7 & ins0411=0xE1 & regA ; eregC & imm1623=0 & ifcnt & elsecnt
+[
+    # Save instructions count for then and else branches
+    thenbranch=ifcnt+1; globalset(inst_next, thenbranch);
+    elsebranch=elsecnt; globalset(inst_next, elsebranch);
+
+    ifblock=1; globalset(inst_next, ifblock);
+]
+{
+    if (regA s<= eregC) goto <else>;
+    cres=1;
+    goto <end>;
+
+<else>
+    cres=0;
+<end>
+}
+
+#
 # if (rB == rA) then { ... } else { ... }
 #
 :if (regA == eregC) { is group=7 & ins0411=0x81 & regA ; eregC & imm1623=0 & ifcnt & elsecnt

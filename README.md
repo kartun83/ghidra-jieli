@@ -32,7 +32,8 @@ addresses at once instead of chasing one-off mismatches.
 | + first round's 3 targeted encoding fixes | 768 | 99.63% |
 | + second round's saturating-arithmetic/branch/load-store fixes | 405 | 99.78% |
 | + third round's multi-register range-list/special-register-list push/pop family | 309 | 99.83% |
-| + fourth round's wide-immediate signed compare-and-branch fix | 277 | **99.87%** |
+| + fourth round's wide-immediate signed compare-and-branch fix | 277 | 99.87% |
+| + fifth round's register-operand shift/divide and `if`/`ifs` sibling fixes | 179 | **99.91%** |
 
 Across all four rounds, previously-undecoded `pi32v2` encoding families were identified and
 added, each verified against every real occurrence in the ground truth (not a sample) and,
@@ -76,6 +77,15 @@ an instruction family this module had already mostly implemented:
   already-implemented 48-bit compare-and-branch instruction family. Real firmware bytes at
   those addresses were previously being mismatched against an unrelated, shorter 4-byte
   bitwise-or instruction.
+- **A fifth round closed 98 more addresses across two areas**: 64-bit-pair register-operand
+  shift/divide ops (`lsl`/`lsr`/`qasr edregA, eregC`, `div edregA, edregB, eregC` — 48
+  addresses) and four missing/too-narrowly-scoped siblings in the `if`/`ifs` conditional-block
+  family (`ifs (rA > rB)`, unsigned `if (rA != #packedimm12)`, a too-narrow `if (rA !=
+  #imm1627s)` widened to its full 12-bit range, and unsigned `if (rA < imm)` — 46 addresses),
+  each confirmed against every real ground-truth occurrence. This round also found and fixed a
+  real (non-decode-affecting) p-code correctness bug flagged by the SLEIGH compiler's own
+  "unnecessary extension" warning: `sextra` (signed bit-field extract) was silently failing to
+  propagate the extracted field's sign bit.
 
 Full derivation, confidence levels, and the remaining (lower-impact, harder) open gaps are
 documented in [`tools/gap-analysis/PI32V2_SLEIGH_GAPS.md`](tools/gap-analysis/PI32V2_SLEIGH_GAPS.md).
@@ -103,7 +113,7 @@ paths, so it works against any target firmware, not just the one this fork was b
 - dv10 *(this is Blackfin, not implemented)*
 - dv12 *(this is Blackfin, not implemented)*
 - pi32 *(not complete, but somewhat usable — untouched by this fork)*
-- **pi32v2** *(99.87% instruction-match rate against real firmware ground truth — see above;
+- **pi32v2** *(99.91% instruction-match rate against real firmware ground truth — see above;
   a handful of lower-impact encoding families still open, see the gap-analysis doc)*
 - q32s *(very early stage — untouched by this fork)*
 - f59 *(not implemented yet)*
@@ -118,13 +128,13 @@ paths, so it works against any target firmware, not just the one this fork was b
   - Maybe refactor the mnemonics? (like the ones used on q32s and pi32v2? or do it the other way around?)
   - Change flags on instructions that change them (e.g. add, sub, rotc, etc.)
 - pi32v2
-  - Remaining missing instructions (a second, pre-decrement-addressed multi-register list
-    encoding distinct from the range-list family already implemented, register-operand
-    shift/divide ops sharing a `0xd8`/`0xf6` first byte, a handful of shorter register/register
-    `ifs`/`if` comparison variants distinct from the wide-immediate family already implemented,
-    one narrow dual-register multiply-accumulate-subtract sub-case of the (otherwise mostly
-    handled) `(ssat,x2)` saturation modifier, `sspn`/`wfe`/`callns` and a few other
-    single/double-byte opcodes — see the gap-analysis doc)
+  - Remaining missing instructions (a second, pre-decrement-addressed single-register
+    multi-register-list push distinct from the `[--sp]={...}` range-list family already
+    implemented, a `packedimm12` compressed-immediate subtable gap affecting some `if (rA <=
+    imm)` values, a second bit-1-flagged sub-case of the register/register `if`/`ifs`
+    comparison family, one narrow dual-register multiply-accumulate-subtract sub-case of the
+    (otherwise mostly handled) `(ssat,x2)` saturation modifier, `sspn`/`wfe`/`callns` and a few
+    other single/double-byte opcodes — see the gap-analysis doc)
   - Mnemonics like in q32s or pi32?
 - q32s
   - Do the rest:

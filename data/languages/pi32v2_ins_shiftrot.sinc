@@ -110,6 +110,43 @@
     edregA = edregA << imm6;
 }
 
+#
+# rA_rB >>>= #imm6 (arithmetic/signed)
+#
+# Sibling of lsr/lsl above in the same ins0011=0x1d0 slot (imm2627=0/2); the
+# 3rd value seen in real firmware is imm2627=3, confirmed against every real
+# occurrence (5 addresses, 4 distinct pair registers and immediates 39/48/56/
+# 63). imm2627=1 is not evidenced anywhere in ground truth and is left
+# unimplemented rather than guessed at.
+:qasr edregA, #imm6 is group=7 & ins0011=0x1d0 ; edregA & imm2627=3 & eregB=0 & imm1619 & imm2425
+[ imm6 = (imm2425 << 4) | imm1619; ]
+{
+    edregA = edregA s>> imm6;
+}
+
+#
+# rA_rB <<= rC / rA_rB >>= rC (64-bit pair shifted by a register-held count)
+#
+# Distinct opcode slot (ins0012=0x1d8, a 13-bit match vs. the 12-bit
+# ins0011=0x1d0 immediate-shift family above) confirmed against every real
+# ground-truth occurrence (26 addresses total): edregA (bits 29-31, the
+# existing pair-register field) is the shifted operand, eregC (bits 24-27,
+# the existing plain-register field) holds the shift count, and the low
+# byte's bit 17 alone (imm1623, reused as an 8-bit exact-match rather than a
+# single named bit since every other bit in that byte was 0 in all samples)
+# selects direction: 0x00 = left, 0x02 = right. Only the logical (unsigned)
+# right shift is evidenced -- no arithmetic/signed variant appears anywhere
+# in ground truth, so none is added here.
+:lsl edregA, eregC is group=7 & ins0012=0x1d8 ; edregA & eregC & imm2828=0 & imm1623=0x00
+{
+    edregA = edregA << eregC;
+}
+
+:lsr edregA, eregC is group=7 & ins0012=0x1d8 ; edregA & eregC & imm2828=0 & imm1623=0x02
+{
+    edregA = edregA >> eregC;
+}
+
 ###########################################################################################
 # (Q) Arithmetic shift left
 ###########################################################################################

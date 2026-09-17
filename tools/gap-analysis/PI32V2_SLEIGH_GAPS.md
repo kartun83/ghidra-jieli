@@ -405,30 +405,40 @@ Ranked by remaining real-firmware address count in the final diff:
   "Fix #8" below.
 - ~~Wide-immediate signed compare-and-branch (`ifs ... s>=`/`s>`)~~ — **resolved in the
   fourth round**, see "Fix #9" below.
-- **Register-operand shift and 64-bit divide op families** sharing first bytes `0xd8`
-  (`r3_r2 >>= r10`, `r5_r4 <<= r1`, `r1_r0 >>>= 63`, ~26 addresses) and `0xf6`
-  (`r3_r2 = r1_r0 / r4 (u)`, `r7_r6 = r3_r2 / r5 (u)`, ~18 addresses) — paired-register
-  shift-by-register and 64-bit-by-32-bit divide ops, not yet modeled.
+- ~~Register-operand shift and 64-bit divide op families (`0xd8`, `0xf6`)~~ — **resolved in
+  the fifth round**, see "Fixes #10-11" below.
+- ~~`ifs (rA > rB)` register/register comparison (`0x10`), unsigned `if (rA != imm)` and
+  `if (rA < imm)` immediate-family gaps (`0xb1`/`0xb2`/`0xb0`/`0xa3`/`0xa7`/`0xbf`/`0xb6`)~~ —
+  **resolved in the fifth round**, see "Fixes #12-13" below. A related but distinct sub-case
+  (register/register comparisons at the *same* opcode slots as the ones just fixed, but with
+  the low byte's bit 1 set instead of 0 -- e.g. `ifs (r0 <= r2) {` at `90 ee 02 02`, where the
+  already-working sibling requires that byte to be exactly 0) was newly discovered this round
+  and is **not** fixed; see "Newly discovered, not yet fixed" below.
 - **A dual-register (`rH_rL`) multiply-accumulate-subtract form of the `(ssat,x2)` modifier**,
   e.g. `r3_r2 -= r6.h,r6.h *|* r15.l,r15.l (ssat,x2)` (first bytes `73 f5`, 5 real addresses
   across only 2 distinct byte patterns) — see the fourth round's write-up below for why this
   specific sub-case (not the `(ssat,x2)` modifier in general, which is now understood and
   mostly already handled) remains unresolved: too few distinct real instances to unambiguously
   separate the destination-register, source-register, and lane-selector bit fields.
-- Several `if`/`ifs` **register/register** comparison variants (first bytes `0x10`, `0xb0`,
-  `0xb1`, `0xb4`, `0x15`, `0x90`/`0x94`/`0x98`/`0x2c`-with-fixed-second-word, ~40 addresses
-  combined) — a different, shorter encoding family than the wide-immediate one resolved in the
-  fourth round; ground truth shows these printed with a trailing `{ ... }` (e.g.
-  `ifs (r0 > r2) {`), suggesting they belong to the `if...then...else` context-register state
-  machine in `pi32v2_ins_ifthenelse.sinc` rather than the flat compare-and-branch family in
-  `pi32v2_ins_progflow.sinc` — not yet investigated.
+- **Unsigned `if (rA <= imm)`/`if (rA <= #packedimm12)` at the *existing* `0xCB` slot fails to
+  decode for some real immediates** (e.g. `if (r3 <= 640)`, `if (r1 <= 4096)`) — this is not a
+  missing opcode slot (0xCB is already implemented and correctly decodes plenty of other
+  addresses), but a real gap in the pre-existing `packedimm12` compressed-immediate subtable
+  itself: none of its 6 existing sub-case patterns (`imm2427=0`/`=1`/`=3`, or
+  `imm2627=1`/`2`/`3` combined with `imm1622`/`imm2325`) matches these specific word2 bit
+  patterns, meaning there's a real 7th hardware shift/scale mode not yet reverse-engineered.
+  Deferred rather than force-guessed: `packedimm12` is shared by six other constructors, so an
+  incorrect sub-case pattern risks silently breaking currently-correct decodes elsewhere, not
+  just failing to fix this one.
 - A handful of miscellaneous single/double-byte opcodes seen only 1-4 times each: `sspn = sp`
   (`0x47 0x14`), `wfe` (`0x44 0x00`), `ssync` (`0x32 0x00`, a *different* encoding from the
-  already-implemented `ssync`), `trigger` (`0x70 0xe8 0x00 0x00`), `callns r12`/`r13`/`r14`/
-  `r15` (`0x9c`/`0x9d`/`0x9e`/`0x9f 0x00`, register-operand siblings of an already-implemented
-  base opcode), and a small `sp` post-increment double-load `r5 = [r0++=-16]`
-  (`df ec 00 5f`) — each too infrequent (1-4 real occurrences) to be worth prioritizing over
-  the bigger buckets above, but individually cheap if revisited.
+  already-implemented `ssync`), `trigger` (`0x70 0xe8 0x00 0x00`), `callns r0`/`r1`/`r12`-`r15`
+  (`0x90`/`0x91`/`0x9c`-`0x9f 0x00`, register-operand siblings of an already-implemented base
+  opcode), a single-register pre-decrement multi-register push `[-rX] = {r9, r2, r0}` (distinct
+  from the already-implemented `[--sp]={...}` range-list family — this one's base register
+  isn't `sp`), and a small `sp` post-increment double-load `r5 = [r0++=-16]` (`df ec 00 5f`) —
+  each too infrequent (1-4 real occurrences) to be worth prioritizing over the bigger buckets
+  above, but individually cheap if revisited.
 - No store-direction sibling was added for the halfword extended-range/negative pre-increment
   forms (`0xd59`/`0xd5b`/`0xd5d`) or the doubleword register-preincrement form (`0xC5C`
   store, `imm1617=3`) — plausible by analogy with their load counterparts and other
@@ -701,3 +711,121 @@ own SLEIGH module, with no MIDI, USB, or OTA/flash I/O performed or attempted at
 community ISA reference was consulted read-only over HTTP as public documentation and was not
 trusted without independent verification against real firmware bytes, consistent with the
 "treat it as a hypothesis, not ground truth" approach used throughout this round.
+
+## Fifth round
+
+### Results this round
+
+| Stage | Gap addresses (of 209,161) | Match rate |
+|---|---|---|
+| Start of this round (= end of fourth round) | 277 | 99.87% |
+| + Fixes #10-13 below | 179 | **99.91%** |
+
+### A real p-code correctness bug, found via the compiler's own warnings (not a decode gap)
+
+Asked to check whether this module's `sleigh` compile warnings were all benign-by-design, one
+wasn't: `sextra` (signed bit-field extract, `pi32v2_ins_logicops.sinc`) computed
+`regA = sext((eregA & smask) >> imm2327);` where both sides of `sext()` were already the same
+4-byte width, so the compiler silently downgraded it to a plain copy (the "1 unnecessary
+extension" warning) — the extracted field's own sign bit was never actually propagated into the
+result's high bits. This has no effect on the *decode-length* metric this whole differential
+harness measures (254 real `sextra` occurrences all still decode at the right length either
+way), which is why it survived four rounds of ground-truth diffing undetected; it's a real bug
+for anyone using Ghidra's decompiler or p-code emulator against this ISA, though.
+
+Fixed with the standard shift-left-then-arithmetic-shift-right bitfield sign-extend idiom
+(`((eregA & smask) >> imm2327) << (32 - imm1822)`, then `s>> (32 - imm1822)`), which also
+matches the *intent* of an already-existing analogous idiom in this same module's (untouched,
+inherited) `q32s` target (`q32s_ins_regfield.sinc`'s own `sextra`, `regE = (regF << lastbit)
+s>> lastbit`) — confirmation that this is the standard fix pattern for this instruction, not a
+novel guess. Recompiling now produces zero "unnecessary extension" warnings (down from 1).
+
+### Fixes #10-11: register-operand 64-bit shift/divide families (`0xd8`, `0xf6`, `0x1d0`)
+
+Three previously-unmodeled 64-bit-pair opcode families, all derived by hand from real
+ground-truth byte patterns (bit-level derivation cross-checked against every real occurrence,
+zero contradictions across 10-26 samples each):
+
+- **`lsl`/`lsr edregA, eregC`** (`ins0012=0x1d8`, 26 addresses) — a 64-bit register pair
+  shifted left or right by a *register-held* count (as opposed to the already-implemented
+  `lsl`/`lsr edregA, #imm6` immediate-count sibling at `ins0011=0x1d0`). Field layout: `edregA`
+  (pre-existing pair-register field) is the shifted operand, `eregC` (pre-existing
+  plain-register field) holds the count, and the low byte's bit 1 selects direction (`0`=left,
+  `1`=right) — every other bit in that byte was 0 across all 26 real samples. Only the logical
+  (unsigned) forms are evidenced; no arithmetic/signed register-count shift exists anywhere in
+  ground truth, so none was added.
+- **`qasr edregA, #imm6`** (`ins0011=0x1d0`, `imm2627=3`, 5 addresses) — the arithmetic
+  (signed) sibling of the already-implemented `lsr`/`lsl edregA, #imm6` (`imm2627=0`/`2`) in the
+  *same* opcode slot. `imm2627=1` is not evidenced anywhere in this firmware and was
+  deliberately left unimplemented rather than guessed at.
+- **`div edregA, edregB, eregC`** (`ins0011=0x1f6`, 17 addresses) — 64-bit-pair ÷
+  single-register unsigned division, a separate opcode slot from the existing 32-bit `div`/
+  `div.s`. Field layout: `edregA` destination pair, `edregB` dividend pair, `eregC` divisor
+  register; two single reserved bits (word2 bit 12, reusing the existing `imm2828` field, and
+  word2 bit 4, needing a new field `imm2020` added to `pi32v2.slaspec`) are 0 in every real
+  sample and are pinned rather than left unconstrained. Only the unsigned form is evidenced.
+
+### Fixes #12-13: missing `if`/`ifs` comparison-family siblings (`pi32v2_ins_ifthenelse.sinc`)
+
+The `if`/`ifs (regA OP ...) { ... } else { ... }` conditional-block family (the
+context-register/state-machine constructors, distinct from the flat compare-and-branch family
+fixed in the fourth round) turned out to have the exact same shape of gap as that earlier fix:
+a handful of genuinely missing opcode slots in an otherwise near-complete, systematically-laid-
+out family, found by decoding real gap bytes and checking which `ins0411` (or, for the
+register-register family, `ins0011`) values were simply unclaimed by any existing constructor:
+
+- **`ifs (regA > eregC) {`** (`ins0411=0xE1`, 9 addresses) — missing signed
+  register/register `>`, alongside the already-implemented `>=`/`<=`/`<` siblings at
+  `0xD1`/`0xE9`/`0xD9`.
+- **`if (regA != #packedimm12) {`** (`ins0411=0x8A`, 2 addresses) — missing unsigned `!=`
+  against a compressed/shifted immediate, mirroring the already-implemented `==` sibling at
+  `0x82`.
+- **`if (regA != #imm1627s) {`** (`ins0411=0x8B`) — this slot already existed but was scoped
+  far too narrowly (`imm2427=0 & imm1623`, i.e. only an 8-bit value with the high nibble forced
+  to 0) where it should have used the full signed 12-bit `imm1627s` field directly, exactly
+  like its `==` sibling at `0x83` (which was never restricted this way). Widened rather than
+  replaced; real firmware needs values like `-1` and `-97` that only fit in the full 12 bits.
+- **`if (regA < imm1627) {`** (`ins0411=0x9B`, 4 addresses) — missing unsigned `<` against a
+  plain 12-bit immediate, mirroring the already-implemented `>=` sibling at `0x93`.
+
+### Newly discovered, not yet fixed
+
+While fixing `ifs (regA > eregC)` above, a **second, distinct sub-case** of the same
+register-register comparison opcodes turned up: the exact same `ins0411` values already used by
+the *existing* `>=`/`<=`/`<` (and now `>`) siblings recur at different real addresses with the
+low byte's bit 1 set (`imm1623=0x02`) instead of the `imm1623=0` every existing sibling
+requires — e.g. `ifs (r0 <= r2) {` at bytes `90 ee 02 02` fails to decode even though
+`ins0411=0xE9` (`<=`, `eregC`) is already implemented, purely because that implementation
+requires `imm1623=0` and this instance has `imm1623=2`. This is the *same* "bit 1 = variant
+flag" shape seen in the `0xd8` shift-direction family (Fix #10 above), but what the flag
+actually *means* here (a wider operand? a different addressing mode for one side of the
+compare?) isn't yet determined from the ~8 real occurrences seen so far. Left open rather than
+guessed at; see the updated "Still open" section above.
+
+### Also verified: unsigned `if (rA <= imm)` gap at `0xCB` is a `packedimm12` subtable gap, not a missing opcode
+
+`if (r3 <= 640) {` and `if (r1 <= 4096) {` decode as `BAD` even though `ins0411=0xCB` (`if
+regA <= #packedimm12`) is already implemented and correctly handles plenty of other addresses.
+Decoding by hand confirmed this is a real gap in the shared `packedimm12` compressed-immediate
+subtable itself (none of its existing 6 sub-case patterns matches these word2 bit patterns) —
+see "Still open" above for why this was deferred rather than patched blind.
+
+### Files touched this round
+
+- `data/languages/pi32v2.slaspec` (new field `imm2020`)
+- `data/languages/pi32v2_ins_logicops.sinc` (`sextra` p-code fix)
+- `data/languages/pi32v2_ins_shiftrot.sinc` (2 new constructors: `qasr edregA,#imm6`,
+  `lsl`/`lsr edregA,eregC`)
+- `data/languages/pi32v2_ins_arithops.sinc` (1 new constructor: `div edregA,edregB,eregC`)
+- `data/languages/pi32v2_ins_ifthenelse.sinc` (3 new constructors, 1 widened constructor)
+- `data/languages/pi32v2.sla` (recompiled)
+
+### Non-invasive-first compliance (this round)
+
+Static analysis and headless Ghidra batch-disassembly only, against the same real firmware
+image and this fork's own SLEIGH module. The one departure from pure "read bytes, reason about
+bits" analysis was compiling two tiny freestanding C snippets (signed bit-field extraction, to
+independently sanity-check the `sextra` fix's premise) with the real JieLi `clang` toolchain, in
+a Linux VM already set up for this exact purpose (needed because the toolchain only ships
+Linux x86-64 binaries) — no new tool installation, no device I/O, no MIDI/USB/OTA touched at
+any point.

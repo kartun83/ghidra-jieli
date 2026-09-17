@@ -1,0 +1,15 @@
+# Real firmware under investigation and its ground-truth disassembly are not
+# ours to redistribute — keep them local only. See tools/gap-analysis/ for the
+# tooling that consumes these (paths are passed explicitly, nothing hardcoded).
+research/
+
+# Ghidra project scratch state / stray build artifacts from ad-hoc `sleigh -a`
+# runs in data/languages/.
+*.gpr
+*.rep/
+data/languages/pi32.sla
+data/languages/q32s.sla
+data/languages/dv10.sla
+data/languages/dv12.sla
+data/languages/f59.sla
+data/languages/f95.sla
