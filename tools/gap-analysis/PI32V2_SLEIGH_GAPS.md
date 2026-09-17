@@ -1,24 +1,22 @@
-# pi32v2 SLEIGH (Quarkslab fork) gap-finding session
+# pi32v2 SLEIGH gap-finding session
 
-Date: 2026-09-16
-Scope: static analysis only, no hardware/MIDI/OTA I/O touched.
+Scope: static analysis only — disassembly comparison against a real firmware binary, no
+device I/O of any kind.
 
 ## Goal
 
 Build a differential gap-finder between the real LLVM/clang-toolchain ground-truth
-disassembly of `app.bin` (`research/disasm/app_full_disasm_llvm.txt`, 226k lines) and the
-`kartun83/ghidra-jieli` fork of `quarkslab/ghidra-jieli`'s pi32v2 SLEIGH module
-(`~/dev/ghidra-jieli-quarkslab`, installed locally as Ghidra language id
-`pi32v2q:LE:32:default`), then fix the highest-impact gaps.
+disassembly of a real shipped firmware image and this fork's `pi32v2` SLEIGH module
+(installed locally as Ghidra language id `pi32v2q:LE:32:default`), then fix the
+highest-impact gaps.
 
 ## Tooling produced
 
-- `research/ghidra/scripts/DumpDisasm.java` — a Ghidra headless post-script that
-  linear-sweeps a whole memory block and forces disassembly at every address, writing
-  `<addr>\t<len>\t<OK|BAD>\t<text>` per line. See the in-file comment for an important
-  methodology note (below).
-- `tools/pi32v2_sleigh_diff.py` — walks the ground-truth objdump listing address-by-address,
-  looks up the matching Ghidra decode, and flags `BAD` (Ghidra couldn't decode anything),
+- `DumpDisasm.java` — a Ghidra headless post-script that linear-sweeps a whole memory block
+  and forces disassembly at every address, writing `<addr>\t<len>\t<OK|BAD>\t<text>` per
+  line. See the in-file comment for an important methodology note (below).
+- `pi32v2_sleigh_diff.py` — walks a ground-truth objdump listing address-by-address, looks
+  up the matching Ghidra decode, and flags `BAD` (Ghidra couldn't decode anything),
   `LEN_MISMATCH` (decoded, but wrong instruction length — the most reliable desync signal),
   and `MISSING`. Ranks gaps by byte-pattern frequency (not raw address count), since one
   `.sinc` fix can resolve hundreds of addresses sharing an encoding family. Also filters out
@@ -29,7 +27,7 @@ disassembly of `app.bin` (`research/disasm/app_full_disasm_llvm.txt`, 226k lines
   below) — comparing against a misaligned/data region there produces noise, not real SLEIGH
   bugs.
 
-## Important methodology finding (write this back to project memory)
+## Important methodology finding
 
 **A naive "force-disassemble one address at a time with an `AddressSet` restricted to that
 single address" approach produces large numbers of false-positive `BAD` results** for
@@ -58,12 +56,11 @@ LLVM/clang objdump's own disassembler can't decode a word. These are not gaps in
 ground truth's authority; they mark places where the compiler emitted **non-instruction
 data interleaved in `.text`** (jump tables, literal pools, alignment padding) that a purely
 linear disassembly pass (both objdump's and our forced-sweep's) will still try to decode as
-code. Example confirmed by hand (`0x200332a`, surrounded by four consecutive `<unknown
-instruction>` words before it and after): a "ssync" and "swi" reading there is objdump
-noise against a literal-pool region, not real code. `--unknown-window` filters gap
-addresses near such regions out of the ranking so real SLEIGH gaps aren't buried under this
-noise (excludes ~28k of the ~209k ground-truth addresses from comparison near such
-regions).
+code. Example confirmed by hand: an address surrounded by four consecutive `<unknown
+instruction>` words before it and after decoded as "ssync" and "swi" — objdump noise
+against a literal-pool region, not real code. `--unknown-window` filters gap addresses near
+such regions out of the ranking so real SLEIGH gaps aren't buried under this noise
+(excludes ~28k of the ~209k ground-truth addresses from comparison near such regions).
 
 ## Results (gap-address counts, ground truth = 209,161 real instructions after excluding
 `<unknown instruction>` lines)
@@ -79,15 +76,15 @@ Final state: **99.63%** of real (non-data-region, non-`<unknown instruction>`) g
 instructions decode with matching length in the fixed module, up from 99.35% before this
 session's fixes and roughly 95.7% before even the harness methodology fix.
 
-## Fixes made (all in `~/dev/ghidra-jieli-quarkslab`, branch `fix/pi32v2-gaps`)
+## Fixes made
 
 All three were derived by writing small Python bit-field solvers against the ground-truth
-listing (`research/disasm/app_full_disasm_llvm.txt`) — collecting every occurrence of a
-given failing mnemonic shape, brute-forcing which bit-slice(s) of the 16/32-bit instruction
-word reproduce the observed register/immediate values, and cross-checking the discriminator
-bits against neighboring already-implemented constructors in the same `.sinc` file for
-naming/style consistency. Each fix recompiled cleanly with `sleigh` (no new ambiguity
-warnings beyond the two pre-existing delay-slot warnings already in the file).
+listing — collecting every occurrence of a given failing mnemonic shape, brute-forcing
+which bit-slice(s) of the 16/32-bit instruction word reproduce the observed
+register/immediate values, and cross-checking the discriminator bits against neighboring
+already-implemented constructors in the same `.sinc` file for naming/style consistency.
+Each fix recompiled cleanly with `sleigh` (no new ambiguity warnings beyond the two
+pre-existing delay-slot warnings already in the file).
 
 ### 1. Register-indexed post-increment load/store family (highest impact, ~3000 addresses)
 
@@ -143,7 +140,7 @@ register field (bits 12-15 of the second halfword) and offset formula matched ex
 
 ## Still open (not fixed this session — lower priority / more ISA-modeling work needed)
 
-Ranked by remaining address count in the final diff (`research/ghidra/ghidra_disasm_dump_final.txt`):
+Ranked by remaining address count in the final diff:
 
 - `40 e8 fd ff` (75 addrs, always byte-identical): objdump prints this as `ifeq goto -6`
   (branches to `pc-2`, i.e. a tight self-referential loop). All 75 occurrences share
@@ -177,45 +174,35 @@ Ranked by remaining address count in the final diff (`research/ghidra/ghidra_dis
 
 ```
 # 1. Rebuild the SLEIGH module (after editing .slaspec/.sinc files):
-cd ~/dev/ghidra-jieli-quarkslab/data/languages && \
-  ~/soft/ghidra_12.1.3_PUBLIC/support/sleigh pi32v2.slaspec
+cd data/languages && sleigh pi32v2.slaspec
 
-# 2. Copy into the installed Ghidra processor module:
+# 2. Copy into your installed Ghidra processor module directory:
 cp pi32v2.sla pi32v2.slaspec pi32v2_ins_*.sinc \
-  ~/soft/ghidra_12.1.3_PUBLIC/Ghidra/Processors/JieLi-Quarkslab/data/languages/
+  <ghidra-install>/Ghidra/Processors/<your-pi32v2-module-name>/data/languages/
 
-# 3. Fresh headless import + forced linear-sweep dump:
-cd /Users/alekseitveritinov/dev/keysmith/research/ghidra
+# 3. Fresh headless import + forced linear-sweep dump against your own target binary:
 rm -rf proj_tmp && mkdir proj_tmp
-~/soft/ghidra_12.1.3_PUBLIC/support/analyzeHeadless proj_tmp smk37elite-q \
-  -import /Users/alekseitveritinov/dev/keysmith/research/smk37-elite-016-unpacked/files/app.bin \
-  -loader BinaryLoader -loader-baseAddr 0x2000120 -processor pi32v2q:LE:32:default \
-  -noanalysis -scriptPath scripts -postScript DumpDisasm.java ghidra_disasm_dump.txt
+<ghidra-install>/support/analyzeHeadless proj_tmp my-project \
+  -import /path/to/your/firmware.bin \
+  -loader BinaryLoader -loader-baseAddr <base-addr> -processor pi32v2q:LE:32:default \
+  -noanalysis -scriptPath tools/gap-analysis -postScript DumpDisasm.java ghidra_disasm_dump.txt
 
-# 4. Diff against ground truth:
-cd /Users/alekseitveritinov/dev/keysmith
-python3 tools/pi32v2_sleigh_diff.py \
-  --ground-truth research/disasm/app_full_disasm_llvm.txt \
-  --ghidra-dump research/ghidra/ghidra_disasm_dump.txt --top 40
+# 4. Diff against your own ground-truth objdump:
+python3 tools/gap-analysis/pi32v2_sleigh_diff.py \
+  --ground-truth /path/to/your/objdump_ground_truth.txt \
+  --ghidra-dump ghidra_disasm_dump.txt --top 40
 ```
 
 ## Files touched
 
-- `~/dev/ghidra-jieli-quarkslab/data/languages/pi32v2.slaspec` (new `regCh`, `ins1015`
-  token fields + attach)
-- `~/dev/ghidra-jieli-quarkslab/data/languages/pi32v2_ins_loadstore.sinc` (6 new
-  constructors, fix #1)
-- `~/dev/ghidra-jieli-quarkslab/data/languages/pi32v2_ins_stack.sinc` (3 new constructors,
-  fixes #2 and #3)
-- `~/dev/ghidra-jieli-quarkslab/data/languages/pi32v2.sla` (recompiled)
-- Committed to branch `fix/pi32v2-gaps` in that fork, pushed to `origin`
-  (`kartun83/ghidra-jieli`). Not touching keysmith's own git history for this work (per
-  task instructions), only adding new files here (this doc, the diff tool, the dump
-  script) which are part of keysmith.
+- `data/languages/pi32v2.slaspec` (new `regCh`, `ins1015` token fields + attach)
+- `data/languages/pi32v2_ins_loadstore.sinc` (6 new constructors, fix #1)
+- `data/languages/pi32v2_ins_stack.sinc` (3 new constructors, fixes #2 and #3)
+- `data/languages/pi32v2.sla` (recompiled)
 
 ## Non-invasive-first compliance
 
-This entire session was static analysis on files already on disk: reading
-`app_full_disasm_llvm.txt`, running Ghidra headless against the decrypted `app.bin` copy,
-and editing/recompiling a SLEIGH module in a separate git repo. No MIDI, USB, or OTA/flash
-I/O was performed or attempted at any point.
+This entire session was static analysis: reading a ground-truth disassembly listing,
+running Ghidra headless against a decrypted firmware image already on disk, and
+editing/recompiling this SLEIGH module. No MIDI, USB, or OTA/flash I/O was performed or
+attempted at any point.
