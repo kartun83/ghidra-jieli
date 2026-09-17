@@ -1656,3 +1656,71 @@ an immediate the more compact `packedimm12` form can't represent (e.g. `if (r15 
 forces the 6-byte form; round numbers like `2048`/`4096`/`65536` stay in the compact form via
 `packedimm12`'s own shifted-immediate trick) — useful for generating targeted synthetic ground
 truth in a future round without needing to find real firmware examples.
+
+## Thirteenth round: the full special-register bitmap push/pop is fixed
+
+The assembler discovery immediately paid off on the *other* twelfth-round deferred item. Rather
+than reasoning about the ninth/twelfth round's `[--sp] = {sp, ssp, usp, icfg, psr, rets, retx,
+rete, reti}` example from a single real data point, its exact byte encoding was reverse-engineered
+by asking the vendor assembler to assemble targeted variations and reading back what it produced —
+turning a one-example guessing problem into as many test vectors as needed.
+
+### Method
+
+`[--sp] = {sp, ssp, usp, icfg, psr, rets, retx, rete, reti}` assembled to `58 e9 2f 78` — an exact
+byte-for-byte match to the real bytes at firmware address `0x020001d0` from the twelfth round,
+confirming the assembler's model of this instruction is the real one. From there, single- and
+paired-register probes pinned down the exact bit layout:
+
+| Assembled | Bytes | Bits set |
+|---|---|---|
+| `[--sp] = {icfg}` | `58 e9 00 08` | bit 11 |
+| `[--sp] = {rets, icfg}` | `58 e9 08 08` | bits 3, 11 |
+| `[--sp] = {sp, reti}` | `58 e9 01 40` | bits 14, 0 |
+| `{icfg, usp, ssp, sp} = [sp++]` | `50 e9 00 78` | bits 11-14 |
+
+Result: this is a plain 16-bit register-presence bitmap in the second 16-bit word (the exact same
+kind of `imm1631`-based bitmap the already-implemented r0-r15 `pshmap`/`popmap` family uses, just
+over a different 16-entry table), with **bit position exactly equal to the register's index in this
+module's existing special-register table** (`reti`=0, `rete`=1, `retx`=2, `rets`=3, `sr4`=4,
+`psr`=5, `cnum`=6, `sr7`=7, `sr8`=8, `sr9`=9, `sr10`=10, `icfg`=11, `usp`=12, `ssp`=13, `sp`=14,
+`pc`=15 — the same order already declared in `pi32v2.slaspec`'s register definition). Opcode word:
+`0xe958` for push, `0xe950` for pop (`ins0011=0x958`/`0x950`); both directions print in descending
+bit order, unlike the smaller 4-entry `{reti,rete,retx,rets}`-only family's push-descending/
+pop-ascending asymmetry.
+
+### Fix
+
+Added the `pshmapsreg16`/`popmapsreg16` tables (16 entries, one per special register) and their
+descending-recursion wrappers (`pshsrmap16`/`popsrmap16`, mirroring the shape of the existing
+4-entry `pshmapsregs`/`pshsrmap` but built over all 16 entries and reusing `mregread`/`imm1631` as
+the bit source instead of `msregread`/`imm0003`), plus the two top-level constructors
+(`group=7 & ins0011=0x958`/`0x950`) in `pi32v2_ins_stack.sinc`.
+
+### Verification
+
+- Rebuilt (`sleigh pi32v2.slaspec`), clean compile, no new warnings.
+- Re-ran the full ground-truth-vs-Ghidra diff on the twelfth round's firmware image: gap addresses
+  dropped from 46 to 44 (the two fixed addresses, `0x020001d0` and `0x0204762e`), `BAD` count 29 →
+  27, `OK` count +2, everything else unchanged.
+- Also re-ran against the original (first/baseline) firmware image used since round one, to check
+  for regressions on the module's oldest and most-tested reference image: no new gap categories
+  introduced, and no addresses newly broken.
+- `0x020001d0` now decodes as `push {sp,ssp,usp,icfg,psr,rets,retx,rete,reti}`, an exact text match
+  to the real toolchain's mnemonic.
+- `0x0204762e` now decodes at the correct length (4 bytes) as a `pc`-only pop, but with a cosmetic
+  display quirk (`pop {pc,}`, trailing separator) inherited from the same recursive
+  bitmap-list-building idiom the sibling 4-entry family already has a documented "known cosmetic
+  limitation" note for (see the family's own header comment above) — does not affect decode length,
+  which is the property this differential methodology actually measures.
+
+### Files touched this round
+
+- `data/languages/pi32v2_ins_stack.sinc` (new 16-entry special-register bitmap push/pop family)
+- `data/languages/pi32v2.sla` (recompiled)
+
+### Non-invasive-first compliance (this round)
+
+New vendor-assembler invocations (local, read-only besides writing throwaway `.o` files under
+`/tmp`) to test byte-encoding hypotheses, a `sleigh` recompile, and headless Ghidra re-imports of
+already-unpacked local firmware images. No MIDI, USB, or OTA/flash I/O at any point.

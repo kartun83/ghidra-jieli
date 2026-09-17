@@ -733,6 +733,108 @@ pshretsregs3: {rets,pushreglist3} is pushreglist3 & rets & ins0003
     return [pc];
 }
 
+##############################################################################
+# Full 16-entry special-register bitmap push/pop family
+#
+# Same 16-bit register-presence bitmap machinery as the r0-r15 pshmap/popmap
+# pair above (word2 = imm1631, one bit per entry), but indexed over the
+# 16-entry special-register table (reti=0, rete=1, retx=2, rets=3, sr4=4,
+# psr=5, cnum=6, sr7=7, sr8=8, sr9=9, sr10=10, icfg=11, usp=12, ssp=13, sp=14,
+# pc=15 -- the same order this file's register definition already uses)
+# instead of r0-r15. This is a strict superset of the smaller 4-entry
+# {reti,rete,retx,rets}-only bitmap family already implemented above
+# (ins0407 nibbles 0x8-0xf), reachable whenever any of sr4/psr/icfg/usp/ssp/sp
+# is in the list -- those registers have no other encoding.
+#
+# Both directions print in descending bit order (sp/pc-ward register first),
+# unlike the smaller family's push-descending/pop-ascending asymmetry -- this
+# one is symmetric in both directions.
+#
+# Confirmed by real firmware AND independently reproduced via the vendor
+# toolchain's own assembler (`clang -target pi32v2 -x assembler`), which
+# round-trips this exact hypothesis byte-for-byte:
+#   `[--sp] = {sp, ssp, usp, icfg, psr, rets, retx, rete, reti}` assembles to
+#   the exact real bytes seen at firmware address 0x020001d0 (58 e9 2f 78),
+#   and single/paired-register probes (e.g. `{icfg}` -> 58 e9 00 08, `{rets,
+#   icfg}` -> 58 e9 08 08, `{sp, reti}` -> 58 e9 01 40) confirm the bitmap is
+#   exactly "1 << register's table index", independent of the popmap/pshmap
+#   16-bit-bitmap machinery already used for r0-r15 by the sibling family
+#   above. Pop side confirmed the same way: `{icfg, usp, ssp, sp} = [sp++]`
+#   -> 50 e9 00 78 (bits 11-14 set).
+##############################################################################
+
+pshmapsreg16: reti is counter=0  & reti {pushreg(reti);}
+pshmapsreg16: rete is counter=1  & rete {pushreg(rete);}
+pshmapsreg16: retx is counter=2  & retx {pushreg(retx);}
+pshmapsreg16: rets is counter=3  & rets {pushreg(rets);}
+pshmapsreg16: sr4  is counter=4  & sr4  {pushreg(sr4);}
+pshmapsreg16: psr  is counter=5  & psr  {pushreg(psr);}
+pshmapsreg16: cnum is counter=6  & cnum {pushreg(cnum);}
+pshmapsreg16: sr7  is counter=7  & sr7  {pushreg(sr7);}
+pshmapsreg16: sr8  is counter=8  & sr8  {pushreg(sr8);}
+pshmapsreg16: sr9  is counter=9  & sr9  {pushreg(sr9);}
+pshmapsreg16: sr10 is counter=10 & sr10 {pushreg(sr10);}
+pshmapsreg16: icfg is counter=11 & icfg {pushreg(icfg);}
+pshmapsreg16: usp  is counter=12 & usp  {pushreg(usp);}
+pshmapsreg16: ssp  is counter=13 & ssp  {pushreg(ssp);}
+pshmapsreg16: sp   is counter=14 & sp   {pushreg(sp);}
+pshmapsreg16: pc   is counter=15 & pc   {pushreg(pc);}
+
+popmapsreg16: reti is counter=0  & reti {popreg(reti);}
+popmapsreg16: rete is counter=1  & rete {popreg(rete);}
+popmapsreg16: retx is counter=2  & retx {popreg(retx);}
+popmapsreg16: rets is counter=3  & rets {popreg(rets);}
+popmapsreg16: sr4  is counter=4  & sr4  {popreg(sr4);}
+popmapsreg16: psr  is counter=5  & psr  {popreg(psr);}
+popmapsreg16: cnum is counter=6  & cnum {popreg(cnum);}
+popmapsreg16: sr7  is counter=7  & sr7  {popreg(sr7);}
+popmapsreg16: sr8  is counter=8  & sr8  {popreg(sr8);}
+popmapsreg16: sr9  is counter=9  & sr9  {popreg(sr9);}
+popmapsreg16: sr10 is counter=10 & sr10 {popreg(sr10);}
+popmapsreg16: icfg is counter=11 & icfg {popreg(icfg);}
+popmapsreg16: usp  is counter=12 & usp  {popreg(usp);}
+popmapsreg16: ssp  is counter=13 & ssp  {popreg(ssp);}
+popmapsreg16: sp   is counter=14 & sp   {popreg(sp);}
+popmapsreg16: pc   is counter=15 & pc   {popreg(pc);}
+
+pshmsreg16: pshmapsreg16 is pshmapsreg16 & bitset=1 [sep=1;]{}
+pshmsreg16: is bitset=0 {}
+popmsreg16: popmapsreg16 is popmapsreg16 & bitset=1 [sep=1;]{}
+popmsreg16: is bitset=0 {}
+
+# Descending traversal (bit 15 down to bit 0), same shape as pshmapsregs
+# above but over all 16 entries and reusing mregread (imm1631) as the bit
+# source instead of msregread (imm0003).
+pshmapsregs16: pshmsreg16^msep^pshmapsregs16 is counter>0 & mregread & pshmsreg16 & msep & prev & pshmapsregs16
+    { build pshmsreg16; build pshmapsregs16; }
+pshmapsregs16: pshmsreg16 is counter=0 & mregread & pshmsreg16 {}
+pshsrmap16: pshmapsregs16 is pshmapsregs16 [bitset=0; counter=15; sep=0;]{}
+
+popmapsregs16: popmsreg16^msep^popmapsregs16 is counter>0 & mregread & popmsreg16 & msep & prev & popmapsregs16
+    { build popmsreg16; build popmapsregs16; }
+popmapsregs16: popmsreg16 is counter=0 & mregread & popmsreg16 {}
+popsrmap16: popmapsregs16 is popmapsregs16 [bitset=0; counter=15; sep=0;]{}
+
+#
+# [--sp] = {sregs...}  (full 16-entry special-register bitmap)
+#
+:push {pshsrmap16} is group=7 & ins0011=0x958 ; pshsrmap16
+{
+    mult_addr = sp;
+    build pshsrmap16;
+    sp = mult_addr;
+}
+
+#
+# {sregs...} = [sp++]  (full 16-entry special-register bitmap)
+#
+:pop {popsrmap16} is group=7 & ins0011=0x950 ; popsrmap16
+{
+    mult_addr = sp;
+    build popsrmap16;
+    sp = mult_addr;
+}
+
 #
 # [sp+imm5] = rA
 # => sw rA, [sp]

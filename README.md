@@ -168,6 +168,16 @@ an instruction family this module had already mostly implemented:
   line up with the classic ARM condition-code table (`MI`/`PL`/`VS`/`VC`/`NV`), but implementing
   them was deliberately deferred until this grammar's flag-computation semantics (an open question
   from the eleventh round) are resolved, to avoid guessing wrong pcode into the module.
+- **A thirteenth round fixed the full special-register bitmap push/pop**, the one construct the
+  ninth round could only theorize about. Discovered along the way: the vendor toolchain ships a
+  working assembler, which turned a one-example guessing problem into a reverse-engineering one —
+  targeted probes (`[--sp] = {icfg}`, `{rets, icfg}`, `{sp, reti}`, etc.) pinned down the exact bit
+  layout (a 16-bit bitmap indexed by this module's existing special-register table order) with
+  byte-for-byte confirmation against the real firmware bytes. Implemented, recompiled, and verified
+  against both the twelfth round's image (2 addresses fixed, zero regressions) and the project's
+  original baseline image (no new gaps introduced). The wide-immediate branch condition-code gap
+  from the same round was tested with the same assembler but not resolved — see the gap-analysis
+  doc for why.
 
 Full derivation, confidence levels, and the remaining (lower-impact, harder) open gaps are
 documented in [`tools/gap-analysis/PI32V2_SLEIGH_GAPS.md`](tools/gap-analysis/PI32V2_SLEIGH_GAPS.md).
