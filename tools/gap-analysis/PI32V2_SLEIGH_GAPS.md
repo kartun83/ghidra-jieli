@@ -409,41 +409,46 @@ Ranked by remaining real-firmware address count in the final diff:
   the fifth round**, see "Fixes #10-11" below.
 - ~~`ifs (rA > rB)` register/register comparison (`0x10`), unsigned `if (rA != imm)` and
   `if (rA < imm)` immediate-family gaps (`0xb1`/`0xb2`/`0xb0`/`0xa3`/`0xa7`/`0xbf`/`0xb6`)~~ —
-  **resolved in the fifth round**, see "Fixes #12-13" below. A related but distinct sub-case
-  (register/register comparisons at the *same* opcode slots as the ones just fixed, but with
-  the low byte's bit 1 set instead of 0 -- e.g. `ifs (r0 <= r2) {` at `90 ee 02 02`, where the
-  already-working sibling requires that byte to be exactly 0) was newly discovered this round
-  and is **not** fixed; see "Newly discovered, not yet fixed" below.
+  **resolved in the fifth round**, see "Fixes #12-13" below.
+- ~~The `imm1623` bit-1-flagged sub-case of the register/register `if`/`ifs` comparison
+  family~~, ~~the `packedimm12` 7th sub-case (`imm2427=2`)~~, ~~the single-register bitmap
+  push/pop family~~, ~~`callns`/`rtns`/`sspn=sp`/`wfe`/`sevl`/second `ssync`/`btbclr`
+  encodings~~, ~~`trigger`~~, ~~extended-range `sp +=`~~, ~~the memory-operand
+  shift/xor/and-with-packedimm12 compound-assign family~~, ~~signed-byte pre-increment loads~~,
+  ~~the fixed `-16` post-increment word load~~, ~~`sat16`~~ — **all resolved in the sixth
+  round**, see below.
 - **A dual-register (`rH_rL`) multiply-accumulate-subtract form of the `(ssat,x2)` modifier**,
-  e.g. `r3_r2 -= r6.h,r6.h *|* r15.l,r15.l (ssat,x2)` (first bytes `73 f5`, 5 real addresses
-  across only 2 distinct byte patterns) — see the fourth round's write-up below for why this
-  specific sub-case (not the `(ssat,x2)` modifier in general, which is now understood and
-  mostly already handled) remains unresolved: too few distinct real instances to unambiguously
-  separate the destination-register, source-register, and lane-selector bit fields.
-- **Unsigned `if (rA <= imm)`/`if (rA <= #packedimm12)` at the *existing* `0xCB` slot fails to
-  decode for some real immediates** (e.g. `if (r3 <= 640)`, `if (r1 <= 4096)`) — this is not a
-  missing opcode slot (0xCB is already implemented and correctly decodes plenty of other
-  addresses), but a real gap in the pre-existing `packedimm12` compressed-immediate subtable
-  itself: none of its 6 existing sub-case patterns (`imm2427=0`/`=1`/`=3`, or
-  `imm2627=1`/`2`/`3` combined with `imm1622`/`imm2325`) matches these specific word2 bit
-  patterns, meaning there's a real 7th hardware shift/scale mode not yet reverse-engineered.
-  Deferred rather than force-guessed: `packedimm12` is shared by six other constructors, so an
-  incorrect sub-case pattern risks silently breaking currently-correct decodes elsewhere, not
-  just failing to fix this one.
-- A handful of miscellaneous single/double-byte opcodes seen only 1-4 times each: `sspn = sp`
-  (`0x47 0x14`), `wfe` (`0x44 0x00`), `ssync` (`0x32 0x00`, a *different* encoding from the
-  already-implemented `ssync`), `trigger` (`0x70 0xe8 0x00 0x00`), `callns r0`/`r1`/`r12`-`r15`
-  (`0x90`/`0x91`/`0x9c`-`0x9f 0x00`, register-operand siblings of an already-implemented base
-  opcode), a single-register pre-decrement multi-register push `[-rX] = {r9, r2, r0}` (distinct
-  from the already-implemented `[--sp]={...}` range-list family — this one's base register
-  isn't `sp`), and a small `sp` post-increment double-load `r5 = [r0++=-16]` (`df ec 00 5f`) —
-  each too infrequent (1-4 real occurrences) to be worth prioritizing over the bigger buckets
-  above, but individually cheap if revisited.
-- No store-direction sibling was added for the halfword extended-range/negative pre-increment
-  forms (`0xd59`/`0xd5b`/`0xd5d`) or the doubleword register-preincrement form (`0xC5C`
-  store, `imm1617=3`) — plausible by analogy with their load counterparts and other
-  already-implemented load/store pairs, but not added without a real occurrence to confirm
-  against.
+  e.g. `r3_r2 -= r6.h,r6.h *|* r15.l,r15.l (ssat,x2)` (first bytes `73 f5`, 4 real addresses
+  across only 2 distinct byte patterns) — too few distinct real instances to unambiguously
+  separate the destination-register, source-register, and lane-selector bit fields. Still open.
+- **Dual-fetch parallel multiply-accumulate ops** (e.g. `r15_r14 = h[r13 ++= 6]*[r8 ++= -16]
+  (s)`, `r1_r0 -= h[r0 ++= -6]*r10 (u)`) — a handful of single-occurrence DSP-style
+  simultaneous-load-and-multiply instructions; each looks like its own distinct field layout
+  and none repeats often enough to cross-check a bit derivation against.
+- Other saturating-arithmetic single-occurrence forms: `r3_r2 = r12.h,r12.l *|* 4 (usat)`,
+  `r1_r0 = r0,r1 +|+ r3,r3 (usat)`, `r0.l = r0.l - 162`, `r0 = r14.l,r14.h +|+ 32 (ssat) #`,
+  `r3 -= r4.l * 111 (ssat) #`, `r1_r0 = r0.l,r0.l *|* -16 (ssat) #` — each a single real
+  occurrence, not enough to confirm a general field layout.
+- The still-unresolved **wide-immediate `if (rX ?? imm)`/`ifs (rX ?? imm) goto ...` family**
+  (12 `LEN_MISMATCH` addresses, ground truth itself prints `??` for the condition — even the
+  real LLVM-based objdump doesn't have a clean mnemonic for whatever condition code this is).
+  Deferred across three rounds now for the same reason: fixing this means extending the
+  if/then/else context-register state machine and disambiguating it against the existing
+  32-bit `or`-immediate constructor that currently (incorrectly) claims these bytes, real but
+  distinct work from anything else in this document, with real risk of regressing the `or`
+  family if the new pattern is too broad.
+- A `[rX+off] += imm` compound-assign-with-immediate-delta family (e.g. `[r0+-80] += 517`,
+  `[r1+-4] += 1`) at `ins0511≈0x7c`/`0x7d`-adjacent opcodes — some instances (offset -80/-36/-8,
+  delta 517) were decoded far enough to confirm the delta comes from `imm1631` directly, but a
+  different instance (offset -4, delta 1) doesn't fit that same formula, meaning offset and
+  delta are packed together in a way not yet fully solved. Left open rather than guessed at.
+- A handful of remaining miscellaneous single-occurrence opcodes: `{pc} = [sp++]` (group=7
+  bitmap-list form, `0x950`, distinct from the already-implemented group=0 `pop pc`),
+  `[--sp] = {sp, ssp, usp, icfg, psr, rets, retx, rete, reti}` (a much larger special-register
+  set than the existing 4-bit `{reti,rete,retx,rets}` bitmap already handles), a doubleword
+  pre-increment store `d[++r3=940] = r5_r4`, and negative-offset halfword/word store siblings
+  (`h[r0++=-4] = r3`, `h[r15++=-260] = r3`, `[r2++=-8] = r3`) that share an opcode slot with the
+  now-implemented fixed-`-16` load but need a still-unsolved variable-offset formula.
 
 ## Files touched this session
 
@@ -829,3 +834,176 @@ independently sanity-check the `sextra` fix's premise) with the real JieLi `clan
 a Linux VM already set up for this exact purpose (needed because the toolchain only ships
 Linux x86-64 binaries) — no new tool installation, no device I/O, no MIDI/USB/OTA touched at
 any point.
+
+## Sixth round
+
+### Results this round
+
+| Stage | Gap addresses (of 209,161) | Match rate |
+|---|---|---|
+| Start of this round (= end of fifth round) | 179 | 99.91% |
+| + Fixes #14-24 below | 68 | **99.97%** |
+
+Zero regressions throughout: `MISSING` went from 6 to 5 (one genuine fix), and `LEN_MISMATCH`
+stayed effectively flat (11 → 12 — the one apparent increase is the pre-existing `npc`-pseudo-
+register address changing from a clean decode failure to a wrong-length match against an
+unrelated new constructor, not a newly-broken address; it was already a gap either way). Every
+other closed address moved from `BAD`/`MISSING` straight to a correct-length `OK`.
+
+### A reproduction bug worth recording
+
+Before any of the fixes below, re-running this round's verification pipeline from scratch (the
+working directory had changed since the last session) produced a *completely* broken result —
+every single ground-truth address showed as `MISSING`. The cause: the raw `app.bin` image needs
+`-loader-baseAddr 0x2000120`, not `0x2000000` — the flat binary's file offset 0 corresponds to
+`.text`'s VMA `0x2000120`, not the naively-assumed round base address. Getting this wrong
+doesn't fail loudly; it silently produces a full-image address shift that looks superficially
+like a real regression. Confirmed by comparing raw bytes at file offset 0 against the
+ground-truth disassembly's first real instruction. Worth checking first if a from-scratch
+reproduction of this pipeline ever again claims 0% match.
+
+### Fix #14: single-register-based bitmap push/pop family (`pi32v2_ins_stack.sinc`, ~20 addresses)
+
+The sp-only bitmap push/pop family (`[--sp]={reg,...}` / `{reg,...}=[sp++]`, `pshmap`/`popmap`
+in `pi32v2_ins_stack.sinc`) turned out to have real-firmware siblings using an **arbitrary
+register** as the base instead of `sp`, in six addressing-mode variants sharing one
+`ins0411`-keyed opcode family:
+
+- `ins0411=0xB1`: `{list} = [regA++]` (post-increment pop, writeback)
+- `ins0411=0xB3`: `[regA++] = {list}` (post-increment push, writeback)
+- `ins0411=0xB4`: `{list} = [-regA]` (pre-decrement pop, no writeback)
+- `ins0411=0xB5`: `{list} = [--regA]` (pre-decrement pop, writeback)
+- `ins0411=0xB6`: `[-regA] = {list}` (pre-decrement push, no writeback)
+- `ins0411=0xB7`: `[--regA] = {list}` (pre-decrement push, writeback)
+
+All six reuse the *exact same* 16-bit register-presence bitmap (`imm1631`) already used by
+`pshmap`/`popmap`, confirmed against every real occurrence (`regA` = r1, r2, r5, r6, r7, r9,
+r10, r11, r13, r14 across the six slots, register lists from 2 to 8 entries). Reusing `pshmap`/
+`popmap` directly works for the post-increment pop and pre-decrement push forms; the
+post-increment push form needed a new forward-storing mirror table (`pshmapfwd`, store-then-
+increment instead of pre-decrement-then-store) and the pre-decrement pop forms needed a new
+decrement-then-load mirror (`popmaprev`) that reuses `pshmapregs`' own recursion *shape*
+(deepest bit first) so its address computation is byte-identical to what a matching
+pre-decrement push of the same bitmap would use.
+
+The single-dash (`[-regA]`) vs double-dash (`[--regA]`) distinction for the pre-decrement forms
+is inferred, not independently provable from decode length alone: it mirrors the one asymmetry
+already established for the sp-only forms, where the pre-decrement push always writes back
+(that being the entire point of a stack push) and is always shown double-dash. Modeled as
+"compute the address, use it, leave the base register unmodified" for the single-dash forms —
+plausible, matches the one architectural precedent this module already has, but not
+independently confirmed via synthetic compilation.
+
+### Fix #15: register-register `if`/`ifs` `imm1623`-flagged siblings (`pi32v2_ins_ifthenelse.sinc`)
+
+The "bit-1-flagged sub-case" left open at the end of the fifth round turned out, with more
+ground truth in hand, to be four *exact-value* aliases of already-implemented opcodes, each
+needing one specific nonzero `imm1623` value instead of the usual 0 — the same shape of
+distinction this file's `if ((regA & eregC) != 0)` constructor already uses (`imm1623=0x80`
+there) to disambiguate from its `imm1623=0` sibling:
+
+- `if (regA < eregC) {` (`0x99`) also decodes at `imm1623=0x05`
+- `if (regA > eregC) {` (`0xC1`) also decodes at `imm1623=0x05`
+- `ifs (regA >= eregC) {` (`0xD1`) also decodes at `imm1623=0x05`
+- `ifs (regA <= eregC) {` (`0xE9`) also decodes at `imm1623=0x02`
+
+What `imm1623` actually encodes in these cases still isn't independently known — only that
+these exact byte pairings are what real firmware emits, each confirmed against every real
+occurrence.
+
+### Fix #16: the `packedimm12` 7th sub-case (`imm2427=2`)
+
+The `packedimm12` compressed-immediate subtable gap flagged since the fifth round (`if (rA <=
+640/4096)` failing to decode) turned out to be a genuinely missing `imm2427=2` case — confirmed
+against **two independent real occurrences at two completely different top-level opcodes**
+(`imm1623=5 → 0x05000500 = 83887360` in an `if (rX < ...)` immediate-compare gap, and
+`imm1623=2 → 0x02000200 = 33554944` in an `ifs (rX > ...)` gap), both landing on the exact same
+formula as the already-implemented `imm2427=1` case (`(imm1623<<24)|(imm1623<<8)`) — this looks
+like a genuine duplicate/alternate encoding of the same byte-repeat-at-24-and-8 shape rather
+than a distinct one. Added to both `packedimm12` and its `notpackedimm12` mirror, plus the one
+missing top-level sibling this exposed, `if (regA < #packedimm12) {` (`0x9A`, mirroring the
+already-implemented `>=` at `0x92`). Confirmed via full re-diff to introduce no new pattern
+ambiguity with the six other constructors that share this subtable (all their `imm2427`/
+`imm2627` value ranges are mutually exclusive with the new case by construction) and no
+decode-length regressions anywhere in the firmware.
+
+One address in the same test-table region (`ifs (r12 <= 514) {`, sharing the exact same word2
+bits as one of the two confirmed occurrences above but at a *different* top-level opcode,
+`0xEB`) produces a *different* ground-truth value (514, a plain 12-bit `imm1627`, not a
+`packedimm12` result) from the identical bits — since `packedimm12` is a shared subtable that
+must decode identically everywhere it's invoked, this specific address is very likely an
+undefined/reserved bit pattern in the exhaustive self-test table rather than meaningful code;
+not chased further.
+
+### Fixes #17-24: everything else
+
+- **`callns regA`** (`ins0412=0x009`, all 16 registers) — the one open slot immediately before
+  `swi` in the group=0 register-operand opcode run; modeled with plain `call` semantics (no
+  secure/non-secure state exists in this module).
+- **`rtns`** (`ins0012=0x0085`) — sibling of `rts`/`rti`/`rtx`/`rte` (`0x0080`-`0x0083`);
+  modeled as a plain return via `rets`, same reasoning as `callns`.
+- **`sspn = sp`** (`ins0012=0x1447`) — sibling of the existing `sp`/`usp`/`ssp` move quartet
+  (`0x1440`-`0x1443`) in `pi32v2_ins_move.sinc`; needed a new `sspn` register definition (a
+  shadow/secure-state stack pointer with no other use anywhere in this module).
+- **A second `ssync`/`btbclr` encoding** (`0x0032`/`0x0036` → `ssync`, `0x0033`/`0x0037` →
+  `btbclr`, alongside the existing `0x0022`/`0x0023`) and **`sevl`/`wfe`** (`0x0042`/`0x0044`,
+  siblings of `lockclr`/`lockset` at `0x0040`/`0x0041`) — all exact-value aliases, all
+  confirmed against every real occurrence.
+- **`trigger`** (`ins0011=0x870`, fixed 4-byte encoding, `regA=0` and the entire second word
+  always zero in all 4 real occurrences) — pinned to exactly what's evidenced.
+- **Extended-range `sp += imm13`** (`ins0311=0x11E`, `imm0002=0`, a new signed 13-bit
+  `imm1628s` field) for the `±608`/`±640` values outside the existing 10-bit form's
+  `[-512,508]` range. A handful of other real occurrences at the same `ins0311` selector but
+  with `imm0002` = 1/3/6 (values `-3088`, `-528`, `2288`, `-348`) don't fit this same formula
+  and are deliberately left unimplemented — see "Still open" above.
+- **The memory-operand compound-assign family** (`pi32v2_ins_logicops.sinc` /
+  `pi32v2_ins_shiftrot.sinc`): `[rA+off] ^= rB` (sibling of the existing `|=`/`&=`/`&=~` forms,
+  same `ins0011=0x864` opcode, `imm1617=1`); `[rA+off] &= #packedimm12` and
+  `[rA+off] ^= #packedimm12` (siblings of the existing `&= #notpackedimm12` form, sharing its
+  addressing shape but at `ins0611=0x3e`/`0x3d` with a *signed* 6-bit offset-index instead of
+  the unsigned one); and a new `[rA+off] <<=`/`>>=`/`>>>= shamt5` family (`ins0111=0x436`, an
+  11-bit opcode selector that deliberately excludes word1's bit 0, which turned out to be a
+  genuine operand bit — the top bit of a 5-bit shift amount split across word1's bit 0 and
+  word2's low nibble, confirmed against all 8 real occurrences of shift amounts 6/8/22).
+- **Signed-byte pre-increment loads**: `lb.s eregA, [++eregB=#imm1619]` (`ins0011=0xe5c`, a
+  narrower plain 4-bit immediate, distinct from `lb.z`'s existing 8-bit `0xe58`/`0xe59` pair)
+  and `lb.s eregA, [++eregB=eregC]` (register-stride sibling of `lb.z` at `ins0011=0xedc`, using
+  `imm1619=2` — the third value the neighbouring halfword family already uses this same way for
+  z/store/s, since `imm1619=1` at this exact opcode was already claimed by an existing `sb`
+  store constructor).
+- **`lw eregA, [eregB++="-16"]`** (`ins0011=0xcdf`) — a fixed-offset post-increment word load,
+  evidenced only ever with offset `-16` across all 8 real occurrences (`imm2427=15`,
+  `imm1719=0` pinned rather than generalized); a real firmware store sibling exists at the same
+  `ins0011` with a *different*, unsolved offset formula (`imm1719=4`, offsets like `-8`), so
+  `imm1719=0` is pinned specifically to avoid this load constructor over-matching into that
+  still-open store form's space.
+- **`sat16 eregA, eregC`** (`ins0011=0x078`, signed saturate to `[-32768,32767]`) — modeled with
+  the same explicit-branch saturation idiom already used for `sadd.sat`/`smax`/`smin` in
+  `pi32v2_ins_arithops.sinc`.
+
+### Files touched this round
+
+- `data/languages/pi32v2.slaspec` (new `sspn` register, new `imm1628s` field, `packedimm12`/
+  `notpackedimm12` 7th sub-case, second `ssync`/`btbclr`/`sevl`/`wfe` encodings, two new
+  pcodeops)
+- `data/languages/pi32v2_ins_progflow.sinc` (`callns`, `rtns`, `trigger`)
+- `data/languages/pi32v2_ins_move.sinc` (`sspn = sp`)
+- `data/languages/pi32v2_ins_arithops.sinc` (extended-range `sp +=`)
+- `data/languages/pi32v2_ins_stack.sinc` (single-register bitmap push/pop family, two new
+  mirror recursion tables)
+- `data/languages/pi32v2_ins_ifthenelse.sinc` (4 new `imm1623`-flagged aliases, `if (regA <
+  #packedimm12)`)
+- `data/languages/pi32v2_ins_logicops.sinc` (`xor [eregA+offset],eregC`, `and`/`xor
+  [eregA+offset],#packedimm12`, `sat16`)
+- `data/languages/pi32v2_ins_shiftrot.sinc` (memory-operand shift compound-assign family)
+- `data/languages/pi32v2_ins_loadstore.sinc` (signed-byte pre-increment loads, fixed `-16`
+  post-increment word load)
+- `data/languages/pi32v2.sla` (recompiled)
+
+### Non-invasive-first compliance (this round)
+
+Static analysis and headless Ghidra batch-disassembly only, against the same real firmware
+image and this fork's own SLEIGH module, plus fixing the reproduction/base-address bug above
+(no code changes, purely a local verification-pipeline correction). No synthetic compilation
+was needed this round — every fix had enough independent real-firmware confirmation on its own.
+No new tool installation, no device I/O, no MIDI/USB/OTA touched at any point.

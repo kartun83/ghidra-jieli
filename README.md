@@ -33,7 +33,8 @@ addresses at once instead of chasing one-off mismatches.
 | + second round's saturating-arithmetic/branch/load-store fixes | 405 | 99.78% |
 | + third round's multi-register range-list/special-register-list push/pop family | 309 | 99.83% |
 | + fourth round's wide-immediate signed compare-and-branch fix | 277 | 99.87% |
-| + fifth round's register-operand shift/divide and `if`/`ifs` sibling fixes | 179 | **99.91%** |
+| + fifth round's register-operand shift/divide and `if`/`ifs` sibling fixes | 179 | 99.91% |
+| + sixth round's single-register bitmap push/pop, `packedimm12` 7th mode, and misc fixes | 68 | **99.97%** |
 
 Across all four rounds, previously-undecoded `pi32v2` encoding families were identified and
 added, each verified against every real occurrence in the ground truth (not a sample) and,
@@ -86,6 +87,19 @@ an instruction family this module had already mostly implemented:
   real (non-decode-affecting) p-code correctness bug flagged by the SLEIGH compiler's own
   "unnecessary extension" warning: `sextra` (signed bit-field extract) was silently failing to
   propagate the extracted field's sign bit.
+- **A sixth round closed 111 more addresses**, the largest since the initial baseline: a
+  single-register-based bitmap push/pop family (`{list} = [regA++]` and five sibling
+  addressing modes, extending the existing sp-only push/pop machinery to an arbitrary base
+  register), four exact-value `if`/`ifs` register-register comparison aliases, a previously
+  missing 7th mode of the shared `packedimm12` compressed-immediate subtable (confirmed against
+  two independent real occurrences at different opcodes), a memory-operand compound-assign
+  family (`[rX+off] ^=`/`&=`/`<<=`/`>>=`/`>>>=`), signed-byte pre-increment loads, a fixed-
+  offset post-increment word load, and a handful of single/double-byte opcodes (`callns`,
+  `rtns`, `sspn = sp`, `sevl`/`wfe`, a second `ssync`/`btbclr` encoding, `trigger`, `sat16`, and
+  an extended-range `sp +=` form). This round also caught and fixed a reproduction bug in the
+  verification pipeline itself (a wrong raw-binary load base address that silently produced a
+  0%-match false alarm) — worth knowing before trusting a from-scratch run of this pipeline
+  that claims everything is broken.
 
 Full derivation, confidence levels, and the remaining (lower-impact, harder) open gaps are
 documented in [`tools/gap-analysis/PI32V2_SLEIGH_GAPS.md`](tools/gap-analysis/PI32V2_SLEIGH_GAPS.md).
@@ -113,7 +127,7 @@ paths, so it works against any target firmware, not just the one this fork was b
 - dv10 *(this is Blackfin, not implemented)*
 - dv12 *(this is Blackfin, not implemented)*
 - pi32 *(not complete, but somewhat usable — untouched by this fork)*
-- **pi32v2** *(99.91% instruction-match rate against real firmware ground truth — see above;
+- **pi32v2** *(99.97% instruction-match rate against real firmware ground truth — see above;
   a handful of lower-impact encoding families still open, see the gap-analysis doc)*
 - q32s *(very early stage — untouched by this fork)*
 - f59 *(not implemented yet)*
@@ -128,13 +142,15 @@ paths, so it works against any target firmware, not just the one this fork was b
   - Maybe refactor the mnemonics? (like the ones used on q32s and pi32v2? or do it the other way around?)
   - Change flags on instructions that change them (e.g. add, sub, rotc, etc.)
 - pi32v2
-  - Remaining missing instructions (a second, pre-decrement-addressed single-register
-    multi-register-list push distinct from the `[--sp]={...}` range-list family already
-    implemented, a `packedimm12` compressed-immediate subtable gap affecting some `if (rA <=
-    imm)` values, a second bit-1-flagged sub-case of the register/register `if`/`ifs`
-    comparison family, one narrow dual-register multiply-accumulate-subtract sub-case of the
-    (otherwise mostly handled) `(ssat,x2)` saturation modifier, `sspn`/`wfe`/`callns` and a few
-    other single/double-byte opcodes — see the gap-analysis doc)
+  - Remaining missing instructions (one narrow dual-register multiply-accumulate-subtract
+    sub-case of the `(ssat,x2)` saturation modifier, several single-occurrence dual-fetch
+    parallel multiply-accumulate and saturating-arithmetic forms, a `[rX+off] += imm`
+    compound-assign-with-immediate-delta family whose offset/delta packing isn't fully solved,
+    and a few other single-occurrence opcodes — see the gap-analysis doc)
+  - The wide-immediate `if (rX ?? imm)` conditional-branch family (12 addresses) — deferred
+    across several rounds since fixing it means extending the if/then/else state machine and
+    disambiguating against the existing 32-bit `or`-immediate constructor, with real risk of
+    regressing that family if the new pattern is too broad
   - Mnemonics like in q32s or pi32?
 - q32s
   - Do the rest:

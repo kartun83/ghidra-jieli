@@ -357,6 +357,31 @@
 }
 
 #
+# if (rA < #packedimm12) { ... } else { ... }
+#
+# Missing sibling of "if (rA >= #packedimm12)" above (0x92) -- ins0411=0x9A
+# was unused, confirmed against real ground truth ("if (r0/r5/r10 <
+# 83887360)", a value only packedimm12's newly-added imm2427=2 sub-case
+# above can represent).
+#
+:if (regA < #packedimm12) { is group=7 & ins0411=0x9A & regA ; packedimm12 & ifcnt & elsecnt
+[
+    thenbranch=ifcnt+1; globalset(inst_next, thenbranch);
+    elsebranch=elsecnt; globalset(inst_next, elsebranch);
+
+    ifblock=1; globalset(inst_next, ifblock);
+]
+{
+    if (regA >= packedimm12) goto <else>;
+    cres=1;
+    goto <end>;
+
+<else>
+    cres=0;
+<end>
+}
+
+#
 # ifs (rA >= rB) then { ... } else { ... }
 #
 :ifs (regA >= eregC) { is group=7 & ins0411=0xD1 & regA ; eregC & imm1623=0 & ifcnt & elsecnt
@@ -378,11 +403,65 @@
 }
 
 #
+# ifs (rA >= rB) then { ... } else { ... }  (imm1623=0x05 sibling)
+#
+# Same ins0411=0xD1 opcode as above with a nonzero low byte on the second
+# word instead of the usual 0 -- confirmed against real ground truth
+# ("ifs (r10 >= r2) {"). This mirrors the already-established precedent
+# elsewhere in this same file where imm1623 distinguishes two constructors
+# sharing one ins0411 (see "if ((regA & eregC) != 0)" below, which uses
+# imm1623=0x80 for exactly this reason) -- what specifically imm1623=0x05
+# means here isn't independently known, only that this exact byte pairing is
+# what real firmware emits.
+#
+:ifs (regA >= eregC) { is group=7 & ins0411=0xD1 & regA ; eregC & imm1623=0x05 & ifcnt & elsecnt
+[
+    thenbranch=ifcnt+1; globalset(inst_next, thenbranch);
+    elsebranch=elsecnt; globalset(inst_next, elsebranch);
+
+    ifblock=1; globalset(inst_next, ifblock);
+]
+{
+    if (regA s< eregC) goto <else>;
+    cres=1;
+    goto <end>;
+
+<else>
+    cres=0;
+<end>
+}
+
+#
 # ifs (rA <= rB) then { ... } else { ... }
 #
 :ifs (regA <= eregC) { is group=7 & ins0411=0xE9 & regA ; eregC & imm1623=0 & ifcnt & elsecnt
 [
     # Save instructions count for then and else branches
+    thenbranch=ifcnt+1; globalset(inst_next, thenbranch);
+    elsebranch=elsecnt; globalset(inst_next, elsebranch);
+
+    ifblock=1; globalset(inst_next, ifblock);
+]
+{
+    if (regA s> eregC) goto <else>;
+    cres=1;
+    goto <end>;
+
+<else>
+    cres=0;
+<end>
+}
+
+#
+# ifs (rA <= rB) then { ... } else { ... }  (imm1623=0x02 sibling)
+#
+# Same ins0411=0xE9 opcode with imm1623=0x02 instead of 0 -- confirmed
+# against real ground truth ("ifs (r0/r4/r8 <= r2) {"), same
+# not-fully-understood-but-consistently-reproduced flag situation as the
+# 0xD1 sibling above.
+#
+:ifs (regA <= eregC) { is group=7 & ins0411=0xE9 & regA ; eregC & imm1623=0x02 & ifcnt & elsecnt
+[
     thenbranch=ifcnt+1; globalset(inst_next, thenbranch);
     elsebranch=elsecnt; globalset(inst_next, elsebranch);
 
@@ -509,12 +588,60 @@
 <end>
 }
 
-# 
+#
+# if (rB < rA) then { ... } else { ... }  (imm1623=0x05 sibling)
+#
+# Same ins0411=0x99 opcode with imm1623=0x05 instead of 0 -- confirmed
+# against real ground truth ("if (r3/r7/r12 < r2) {"), same
+# not-fully-understood-but-consistently-reproduced flag situation as the
+# 0xD1/0xE9 siblings above.
+#
+:if (regA < eregC) { is group=7 & ins0411=0x99 & regA ; eregC & imm1623=0x05 & ifcnt & elsecnt
+[
+    thenbranch=ifcnt+1; globalset(inst_next, thenbranch);
+    elsebranch=elsecnt; globalset(inst_next, elsebranch);
+
+    ifblock=1; globalset(inst_next, ifblock);
+]
+{
+    if (regA >= eregC) goto <else>;
+    cres=1;
+    goto <end>;
+
+<else>
+    cres=0;
+<end>
+}
+
+#
 # if (rB > rA) then { ... } else { ... }
 #
 :if (regA > eregC) { is group=7 & ins0411=0xC1 & regA ; eregC & imm1623=0 & ifcnt & elsecnt
 [
     # Save instructions count for then and else branches
+    thenbranch=ifcnt+1; globalset(inst_next, thenbranch);
+    elsebranch=elsecnt; globalset(inst_next, elsebranch);
+
+    ifblock=1; globalset(inst_next, ifblock);
+]
+{
+    if (regA <= eregC) goto <else>;
+    cres=1;
+    goto <end>;
+
+<else>
+    cres=0;
+<end>
+}
+
+#
+# if (rB > rA) then { ... } else { ... }  (imm1623=0x05 sibling)
+#
+# Same ins0411=0xC1 opcode with imm1623=0x05 instead of 0 -- confirmed
+# against real ground truth ("if (r4 > r2) {").
+#
+:if (regA > eregC) { is group=7 & ins0411=0xC1 & regA ; eregC & imm1623=0x05 & ifcnt & elsecnt
+[
     thenbranch=ifcnt+1; globalset(inst_next, thenbranch);
     elsebranch=elsecnt; globalset(inst_next, elsebranch);
 

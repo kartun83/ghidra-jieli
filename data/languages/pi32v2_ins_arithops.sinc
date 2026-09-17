@@ -47,6 +47,29 @@
 }
 
 #
+# sp += imm13 (extended-range form)
+# => add sp, #imm13
+#
+# Sibling of the 10-bit-immediate "add sp, #imm10" above, needed for values
+# outside its [-512,508] range (real ground-truth occurrences at -640, -608,
+# 608, 640). Group=7, ins0311=0x11E (bits3-11 of word1, i.e. the low 3 bits
+# 0-2 of ins0011 are NOT part of this opcode selector), second word carries
+# a plain signed 13-bit immediate in its own low bits -- confirmed exactly
+# against every one of these 4 occurrences (word2's top 3 bits are always 0
+# and the value equals imm1628s directly, no further scaling). A handful of
+# other real occurrences (-3088, -528, 2288, -348) share the same
+# ins0311=0x11E opcode selector but with imm0002 (bits0-2) set to 1/3/6
+# instead of 0 and a second-word bit pattern that doesn't fit this same
+# signed-13-bit-immediate formula -- likely a related but differently-scaled
+# sibling encoding, not yet independently derived, and deliberately left
+# unimplemented rather than guessed at.
+#
+:add sp, #imm1628s is group=7 & ins0311=0x11E & imm0002=0 & sp ; imm1628s
+{
+	sp = sp + imm1628s;
+}
+
+#
 # rA = rB + imm5
 # => add rA, rB, #imm5
 #

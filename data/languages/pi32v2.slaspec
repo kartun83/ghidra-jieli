@@ -31,6 +31,12 @@ define register offset=0x0160 size=4
         rep_start     # Repeat start address
     ];
 
+# Shadow/secure-state stack pointer register (only ever seen as "sspn = sp",
+# never as an attached operand of any other constructor -- referenced by bare
+# name in p-code the same way sr4/psr are for the bitmap push/pop family in
+# pi32v2_ins_stack.sinc).
+define register offset=0x0170 size=4 [ sspn ];
+
 ##
 # Pi32v2 Context register
 ##
@@ -189,6 +195,7 @@ define token instr2(16)
     imm1627 = (0,11)
     imm1627s = (0,11) signed
     imm1628 = (0,12)
+    imm1628s = (0,12) signed
     imm1629 = (0,13)
     imm1630 = (0,14)
 	imm1631 = (0,15)
@@ -322,7 +329,21 @@ packedimm12: res is imm1623 & imm2427=3
 packedimm12: res is imm1623 & imm2427=1
     [ res = (imm1623 << 24) | (imm1623 << 8); ]
     { imm:4 = res; export imm;}
-    
+
+#
+# imm2427=2: previously-unimplemented 7th packedimm12 sub-case (the
+# "packedimm12 subtable gap" tracked in PI32V2_SLEIGH_GAPS.md, affecting
+# things like "if (rA <= 640/4096)"). Confirmed against two independent
+# real ground-truth occurrences at completely different top-level opcodes
+# (imm1623=5 -> 0x05000500 = 83887360, and imm1623=2 -> 0x02000200 =
+# 33554944) -- numerically identical to the imm2427=1 formula above, i.e.
+# this looks like a genuine duplicate/alternate encoding of the same
+# byte-repeat-at-24-and-8 shape rather than a distinct one.
+#
+packedimm12: res is imm1623 & imm2427=2
+    [ res = (imm1623 << 24) | (imm1623 << 8); ]
+    { imm:4 = res; export imm;}
+
 packedimm12: res is imm1622 & imm2325 & imm2627=1
     [ res = ((0x80 | imm1622) << 24 ) >> imm2325; ]
     { imm:4 = res; export imm;}
@@ -349,6 +370,12 @@ notpackedimm12: res is imm1623 & imm2427=3
     { imm:4 = res^0xffffffff; export imm;}
 
 notpackedimm12: res is imm1623 & imm2427=1
+    [ res = ((imm1623 << 24) | (imm1623 << 8))^0xffffffff; ]
+    { imm:4 = res^0xffffffff; export imm;}
+
+# Sibling of packedimm12's imm2427=2 case above, kept in sync for the same
+# reason every other packedimm12 case has a notpackedimm12 mirror.
+notpackedimm12: res is imm1623 & imm2427=2
     [ res = ((imm1623 << 24) | (imm1623 << 8))^0xffffffff; ]
     { imm:4 = res^0xffffffff; export imm;}
 
@@ -605,6 +632,8 @@ define pcodeop InstructionCacheFlush;
 define pcodeop DataCacheFlush;
 define pcodeop DataCacheLineInvalidate;
 define pcodeop Trigger;
+define pcodeop WaitForEvent;
+define pcodeop SendEventLocal;
 
 define pcodeop IfElseBlock;
 define pcodeop RepeatBlock;
@@ -693,6 +722,42 @@ define pcodeop TODO;
 }
 
 #
+# ssync (second encoding)
+#
+# A genuine second opcode slot for the exact same "ssync" mnemonic as
+# ins0012=0x0022 above -- confirmed against real ground truth, which has
+# both ins0012=0x0032 and 0x0036 decoding to "ssync" (2 real occurrences each
+# byte-identical). Kept as two exact aliases rather than a generalized
+# "don't-care bit 2" pattern since only these two exact values are evidenced.
+#
+:ssync is group=0 & ins0012=0x0032
+{
+	SystemSynchronize();
+}
+
+:ssync is group=0 & ins0012=0x0036
+{
+	SystemSynchronize();
+}
+
+#
+# btbclr (second encoding)
+#
+# Sibling of the ssync pair above: ins0012=0x0033/0x0037 are a second opcode
+# slot for the same "btbclr" mnemonic as ins0012=0x0023, confirmed against
+# real ground truth the same way.
+#
+:btbclr is group=0 & ins0012=0x0033
+{
+	BTBClear();
+}
+
+:btbclr is group=0 & ins0012=0x0037
+{
+	BTBClear();
+}
+
+#
 # lockclr
 #
 :lockclr is group=0 & ins0012=0x0040
@@ -706,6 +771,32 @@ define pcodeop TODO;
 :lockset is group=0 & ins0012=0x0041
 {
 	SetLock();
+}
+
+#
+# sevl
+#
+# Sibling of lockclr/lockset (0x0040/0x0041) in the same nibble run --
+# ins0012=0x0042 is unused there and matches every real ground-truth
+# occurrence of "sevl" (send-event-local, an ARM-WFE/SEV-family hint with no
+# architectural side effect this module needs to model beyond decoding
+# correctly).
+#
+:sevl is group=0 & ins0012=0x0042
+{
+	SendEventLocal();
+}
+
+#
+# wfe
+#
+# ins0012=0x0044 in the same run, confirmed against real ground truth
+# (wait-for-event, the other half of the sevl/wfe hint pair). 0x0043 is not
+# evidenced anywhere and is left unimplemented.
+#
+:wfe is group=0 & ins0012=0x0044
+{
+	WaitForEvent();
 }
 
 #

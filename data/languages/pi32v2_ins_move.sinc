@@ -45,6 +45,24 @@
 }
 
 #
+# sspn = sp
+#
+# Sibling of the sp/usp/ssp move quartet above (0x1440-0x1443) -- ins0012=
+# 0x1447 is a plain register-to-register move into a shadow/secure-state
+# stack pointer register with no other constructor anywhere in this module
+# (see the `sspn` register definition in pi32v2.slaspec), confirmed against
+# every real ground-truth occurrence (5 addresses). The parallel/delay-slot
+# form ("sspn = sp  #" at ins0012=0xd447, i.e. the same 13 low bits with
+# prefix=6) is handled for free by the existing generic `parainst` prefix=6
+# mechanism, exactly like every other group=0 instruction in this file -- no
+# separate constructor needed.
+#
+:sspn = sp is group=0 & ins0012=0x1447 & sp
+{
+	sspn = sp;
+}
+
+#
 # rA_rA = rB_rB
 # => mov rA_rA, rB_rB
 #

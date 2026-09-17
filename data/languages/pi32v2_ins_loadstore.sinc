@@ -245,6 +245,24 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
     eregB = eregB + imm8;
 }
 
+#
+# rA = [rB++=-16]  (fixed-offset post-increment load)
+#
+# Distinct opcode slot (0xcdf) from the general imm8 form above, evidenced
+# only with a fixed -16 offset across all 8 real ground-truth occurrences
+# (imm2427 pinned at 0xF and imm1719 at 0 in every one) -- a real firmware
+# store sibling exists at the same ins0011 with a *different*, not yet
+# understood offset formula (imm1719=4 there instead of 0, with offsets seen
+# at -8; see PI32V2_SLEIGH_GAPS.md), so imm1719=0 is pinned here deliberately
+# rather than left free, to avoid this load constructor over-matching into
+# that still-unresolved store form's encoding space.
+#
+:lw eregA, [eregB++="-16"] is group=7 & ins0011=0xcdf ; eregA & eregB & imm2427=15 & imm1719=0
+{
+    eregA = *:4 eregB;
+    eregB = eregB - 16;
+}
+
 ###########################################################################################
 # Load Halfword (zero extend)
 ###########################################################################################
@@ -612,7 +630,7 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
     eregA = *:1 eregB;
 }
 
-# 
+#
 # rA = b[++rB=imm8] (u)
 # => lb.z rA, [++rB=-imm8] (negative number)
 #
@@ -621,6 +639,23 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
 {
     eregB = eregB + imm8;
     eregA = *:1 eregB;
+}
+
+#
+# rA = b[++rB=imm4] (s)
+#
+# Signed-load counterpart to lb.z's pre-increment forms above, but at its own
+# opcode slot (0xe5c) with a narrower plain 4-bit immediate (imm1619 used
+# directly, 0-15, not combined with imm2427 the way 0xe58/0xe59's 8-bit
+# immediate is) -- confirmed against all 4 real ground-truth occurrences,
+# including imm2427 being 0 in every one (pinned here rather than left
+# unconstrained, since no occurrence with a nonzero value exists to confirm
+# what it would mean).
+#
+:lb.s eregA, [++eregB=#imm1619] is group=7 & ins0011=0xe5c ; eregA & eregB & imm1619 & imm2427=0
+{
+    eregB = eregB + imm1619;
+    eregA = sext(*:1 eregB);
 }
 
 #
@@ -680,6 +715,22 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
 {
     eregB = eregB + eregC;
     eregA = zext(*:1 eregB);
+}
+
+#
+# rA = b[++rB=rC] (s)
+#
+# Signed sibling of lb.z above, same ins0011=0xedc opcode with imm1619=2 --
+# mirroring the halfword register-stride family's own 0/1/2 = z/store/s
+# convention (lh.z/sh/lh.s all share ins0011=0xddc the same way), rather than
+# imm1619=1 which is already claimed here by "sb eregC, [++eregB=eregA]".
+# Confirmed against the one real ground-truth occurrence
+# ("r0 = b[++r4=r0] (s)").
+#
+:lb.s eregA, [++eregB = eregC] is group=7 & ins0011=0xedc ; eregA & eregB & eregC & imm1619=2
+{
+    eregB = eregB + eregC;
+    eregA = sext(*:1 eregB);
 }
 
 ###########################################################################################

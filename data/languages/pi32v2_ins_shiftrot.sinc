@@ -232,3 +232,53 @@
 {
     eregA = (eregB << imm6) >> imm6;
 }
+
+###########################################################################################
+# Memory-operand compound-assign shifts: [rA+offset] <<=/>>=/>>>= shamt5
+#
+# Same base opcode (ins0111=0x436, an 11-bit selector that deliberately
+# excludes word1's bit0 -- see below) and the same eregA+offset addressing
+# fields as the "[rA+imm8] |= rB" / "^= rB" family above in
+# pi32v2_ins_logicops.sinc, but for a 5-bit immediate shift amount instead of
+# a register operand, with imm1617 selecting the direction the same way it
+# already selects OR(0) vs XOR(1) there: 0=<<, 2=>>(logical), 3=>>>(signed).
+#
+# Confirmed against all 8 real ground-truth occurrences: the 5-bit shift
+# amount is split across word1's bit0 (imm0000, contributing the amount's top
+# bit, worth 16) and word2's bits8-11 (imm2427, the low 4 bits) -- e.g.
+# shift=22 decodes as imm0000=1 (word1=...6D, odd) & imm2427=6 (16+6=22),
+# while shift=6/8 decode as imm0000=0 (word1=...6C, even) & imm2427=6/8.
+# ins0111 (bits1-11, i.e. ins0011 with the LSB masked out) is therefore the
+# real fixed opcode selector; imm0000 is a genuine operand bit, not part of
+# the opcode, despite living in the same byte as ins0011's other fixed bits.
+###########################################################################################
+
+#
+# [rA+offset] <<= shamt5
+#
+:lsl "["eregA+offset"]", #shamt5 is group=7 & ins0111=0x436 & imm0000 ; eregA & imm2427 & imm1823 & imm1617=0
+[ offset = imm1823 << 2; shamt5 = (imm0000 << 4) | imm2427; ]
+{
+    addr:4 = eregA + offset;
+    *:4 addr = *:4 addr << shamt5;
+}
+
+#
+# [rA+offset] >>= shamt5  (logical/unsigned)
+#
+:lsr "["eregA+offset"]", #shamt5 is group=7 & ins0111=0x436 & imm0000 ; eregA & imm2427 & imm1823 & imm1617=2
+[ offset = imm1823 << 2; shamt5 = (imm0000 << 4) | imm2427; ]
+{
+    addr:4 = eregA + offset;
+    *:4 addr = *:4 addr >> shamt5;
+}
+
+#
+# [rA+offset] >>>= shamt5  (arithmetic/signed)
+#
+:qasr "["eregA+offset"]", #shamt5 is group=7 & ins0111=0x436 & imm0000 ; eregA & imm2427 & imm1823 & imm1617=3
+[ offset = imm1823 << 2; shamt5 = (imm0000 << 4) | imm2427; ]
+{
+    addr:4 = eregA + offset;
+    *:4 addr = *:4 addr s>> shamt5;
+}

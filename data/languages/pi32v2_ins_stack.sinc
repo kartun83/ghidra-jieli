@@ -7,6 +7,13 @@
 macro pushreg(reg) { mult_addr = mult_addr - 4; *mult_addr = reg; }
 macro popreg(reg) { reg = *mult_addr; mult_addr = mult_addr + 4;}
 
+# Store-then-increment, the mirror image of popreg's load-then-increment --
+# needed for the "[regA++] = {list}" post-increment push form further below,
+# which (unlike the sp-only pre-decrement push above) must store at
+# *increasing* addresses starting at regA itself, not decreasing addresses
+# ending at it.
+macro pushregfwd(reg) { *mult_addr = reg; mult_addr = mult_addr + 4; }
+
 
 #######################################
 # Registers bitmap to register list
@@ -87,6 +94,73 @@ pshmapregs: pshmapregs^pshmreg^msep is counter<15 & mregread & msep & pshmreg & 
     { build pshmapregs; build pshmreg; }
 pshmapregs: pshmreg is counter=15 & mregread & pshmreg {}
 pshmap: pshmapregs is pshmapregs [bitset=0; counter=0; sep=0;] {}
+
+# Forward-storing (store-then-increment) mirror of pshmap above, used only by
+# the "[regA++] = {list}" post-increment push form further below. Reuses the
+# exact same recursion SHAPE as popmapregs (ascending counter, current bit
+# processed before recursing deeper) since that is the order that produces
+# increasing store addresses -- pshmapregs above recurses the other way
+# (deepest/highest bit first) specifically because pre-decrement pushes need
+# to store the highest register at the highest address first.
+pshmapregfwd: r0 is counter=0 & r0 {pushregfwd(r0);}
+pshmapregfwd: r1 is counter=1 & r1 {pushregfwd(r1);}
+pshmapregfwd: r2 is counter=2 & r2 {pushregfwd(r2);}
+pshmapregfwd: r3 is counter=3 & r3 {pushregfwd(r3);}
+pshmapregfwd: r4 is counter=4 & r4 {pushregfwd(r4);}
+pshmapregfwd: r5 is counter=5 & r5 {pushregfwd(r5);}
+pshmapregfwd: r6 is counter=6 & r6 {pushregfwd(r6);}
+pshmapregfwd: r7 is counter=7 & r7 {pushregfwd(r7);}
+pshmapregfwd: r8 is counter=8 & r8 {pushregfwd(r8);}
+pshmapregfwd: r9 is counter=9 & r9 {pushregfwd(r9);}
+pshmapregfwd: r10 is counter=10 & r10 {pushregfwd(r10);}
+pshmapregfwd: r11 is counter=11 & r11 {pushregfwd(r11);}
+pshmapregfwd: r12 is counter=12 & r12 {pushregfwd(r12);}
+pshmapregfwd: r13 is counter=13 & r13 {pushregfwd(r13);}
+pshmapregfwd: r14 is counter=14 & r14 {pushregfwd(r14);}
+pshmapregfwd: r15 is counter=15 & r15 {pushregfwd(r15);}
+
+pshmregfwd: pshmapregfwd is pshmapregfwd & bitset=1 [sep=1;]{}
+pshmregfwd: is bitset=0 {}
+
+pshmapregsfwd: pshmapregsfwd^pshmregfwd^msep is counter<15 & mregread & msep & pshmregfwd & next & pshmapregsfwd
+    { build pshmregfwd; build pshmapregsfwd; }
+pshmapregsfwd: pshmregfwd is counter=15 & mregread & pshmregfwd {}
+pshmapfwd: pshmapregsfwd is pshmapregsfwd [bitset=0; counter=0; sep=0;] {}
+
+# Decrement-then-load mirror of pshmap's decrement-then-store, used only by
+# the pre-decrement pop forms ("{list} = [-regA]" / "{list} = [--regA]")
+# further below. Reuses pshmapregs' exact recursion SHAPE (deepest/highest
+# bit processed first) so the address computation is byte-for-byte identical
+# to what a matching pre-decrement push of the same bitmap would have used --
+# the only difference is a load instead of a store at each already-decremented
+# position, which self-consistently round-trips regardless of which register
+# ends up at which offset.
+macro poprevreg(reg) { mult_addr = mult_addr - 4; reg = *mult_addr; }
+
+popmapregrev: r0 is counter=0 & r0 {poprevreg(r0);}
+popmapregrev: r1 is counter=1 & r1 {poprevreg(r1);}
+popmapregrev: r2 is counter=2 & r2 {poprevreg(r2);}
+popmapregrev: r3 is counter=3 & r3 {poprevreg(r3);}
+popmapregrev: r4 is counter=4 & r4 {poprevreg(r4);}
+popmapregrev: r5 is counter=5 & r5 {poprevreg(r5);}
+popmapregrev: r6 is counter=6 & r6 {poprevreg(r6);}
+popmapregrev: r7 is counter=7 & r7 {poprevreg(r7);}
+popmapregrev: r8 is counter=8 & r8 {poprevreg(r8);}
+popmapregrev: r9 is counter=9 & r9 {poprevreg(r9);}
+popmapregrev: r10 is counter=10 & r10 {poprevreg(r10);}
+popmapregrev: r11 is counter=11 & r11 {poprevreg(r11);}
+popmapregrev: r12 is counter=12 & r12 {poprevreg(r12);}
+popmapregrev: r13 is counter=13 & r13 {poprevreg(r13);}
+popmapregrev: r14 is counter=14 & r14 {poprevreg(r14);}
+popmapregrev: r15 is counter=15 & r15 {poprevreg(r15);}
+
+popmregrev: popmapregrev is popmapregrev & bitset=1 [sep=1;]{}
+popmregrev: is bitset=0 {}
+
+popmapregsrev: popmapregsrev^popmregrev^msep is counter<15 & mregread & msep & popmregrev & next & popmapregsrev
+    { build popmapregsrev; build popmregrev; }
+popmapregsrev: popmregrev is counter=15 & mregread & popmregrev {}
+popmaprev: popmapregsrev is popmapregsrev [bitset=0; counter=0; sep=0;] {}
 
 
 # Recursively generate our pop registers
@@ -535,6 +609,103 @@ pshretsregs3: {rets,pushreglist3} is pushreglist3 & rets & ins0003
     mult_addr = sp;
     build popmap;
     sp = mult_addr;
+}
+
+##############################################################################
+# Single-register-based bitmap push/pop family
+#
+# Same 16-bit register-presence bitmap machinery as the sp-only pshmap/popmap
+# pair above (word2 = imm1631, one bit per r0-r15), but addressed off an
+# arbitrary regA base instead of a hardcoded sp, and with two distinct
+# addressing-mode pairs instead of just the one sp uses:
+#
+#   ins0411=0xB1 : {list} = [regA++]    (post-increment pop, writeback)
+#   ins0411=0xB3 : [regA++] = {list}    (post-increment push, writeback)
+#   ins0411=0xB4 : {list} = [-regA]     (pre-decrement pop, no writeback)
+#   ins0411=0xB5 : {list} = [--regA]    (pre-decrement pop, writeback)
+#   ins0411=0xB6 : [-regA] = {list}     (pre-decrement push, no writeback)
+#   ins0411=0xB7 : [--regA] = {list}    (pre-decrement push, writeback)
+#
+# Confirmed against every real ground-truth occurrence (regA = r1,r2,r5,r6,
+# r7,r9,r10,r11,r13,r14 across the 6 opcode slots, with register lists
+# ranging from 2 to 8 entries) -- the ins0411 value alone determines
+# direction/addressing, completely independent of regA and of which/how many
+# registers are in the list.
+#
+# The single-dash/double-dash "no writeback" vs "writeback" distinction for
+# the pre-decrement forms is a firmware-external inference (not independently
+# provable from decode-length alone, since it doesn't affect instruction
+# length either way): it mirrors the one asymmetry already established
+# elsewhere in this module, where the sp-only pre-decrement push ALWAYS
+# writes back (that's the entire point of a stack push) and is always shown
+# double-dash. Modeling the single-dash forms as "compute the address, use
+# it, but leave regA itself unmodified" is the natural reading of a distinct
+# opcode existing specifically to omit that writeback, but has not been
+# independently confirmed via synthetic compilation.
+##############################################################################
+
+#
+# {reg, ...} = [regA++]
+# => pop {reg, ...}
+#
+:pop {popmap} is group=7 & ins0411=0xB1 & regA ; popmap
+{
+    mult_addr = regA;
+    build popmap;
+    regA = mult_addr;
+}
+
+#
+# [regA++] = {reg, ...}
+# => push {reg, ...}
+#
+:push {pshmapfwd} is group=7 & ins0411=0xB3 & regA ; pshmapfwd
+{
+    mult_addr = regA;
+    build pshmapfwd;
+    regA = mult_addr;
+}
+
+#
+# {reg, ...} = [-regA]  (no writeback)
+# => pop {reg, ...}
+#
+:pop {popmaprev} is group=7 & ins0411=0xB4 & regA ; popmaprev
+{
+    mult_addr = regA;
+    build popmaprev;
+}
+
+#
+# {reg, ...} = [--regA]  (writeback)
+# => pop {reg, ...}
+#
+:pop {popmaprev} is group=7 & ins0411=0xB5 & regA ; popmaprev
+{
+    mult_addr = regA;
+    build popmaprev;
+    regA = mult_addr;
+}
+
+#
+# [-regA] = {reg, ...}  (no writeback)
+# => push {reg, ...}
+#
+:push {pshmap} is group=7 & ins0411=0xB6 & regA ; pshmap
+{
+    mult_addr = regA;
+    build pshmap;
+}
+
+#
+# [--regA] = {reg, ...}  (writeback)
+# => push {reg, ...}
+#
+:push {pshmap} is group=7 & ins0411=0xB7 & regA ; pshmap
+{
+    mult_addr = regA;
+    build pshmap;
+    regA = mult_addr;
 }
 
 #

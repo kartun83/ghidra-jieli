@@ -37,6 +37,20 @@
 }
 
 #
+# [rA+imm8] ^= rB
+#
+# Sibling of the OR form above, same ins0011=0x864 opcode with imm1617=1
+# instead of 0 -- confirmed against every real ground-truth occurrence
+# ("[r2/r5+0] ^= r1/r0/r6").
+#
+:xor [eregA+offset], eregC is group=7 & ins0011=0x864 ; eregA & eregC & imm1823 & imm1617=1
+[ offset = imm1823<<2; ]
+{
+    addr:4 = eregA + offset;
+    *:4 addr = *:4 addr ^ eregC;
+}
+
+#
 # [rA+imm6] |= packedimm12
 #
 :or [eregA+#offset], #packedimm12 is group=7 & ins0611=0x3C  & imm0005; eregA & packedimm12
@@ -300,6 +314,28 @@
     eregA = ((eregC & 0xff) << 24) | ((eregC & 0xFF00) << 8) | ((eregC & 0xFF0000)>>8) | ((eregC & 0xFF000000)>>24);
 }
 
+# Saturate register to the signed 16-bit range [-32768,32767]
+# rA = sat16(rB) (s)
+#
+# Only one real ground-truth occurrence, at ins0011=0x078 with imm1623=1 --
+# a neighboring but functionally unrelated opcode to rev8 (0x070)/clz (0x180)
+# above, modeled with the same explicit-branch saturation idiom already used
+# for sadd.sat/smax/smin in pi32v2_ins_arithops.sinc rather than guessing at
+# an unconfirmed unsigned (usat16) sibling.
+#
+:sat16 eregA, eregC is group=7 & ins0011=0x078 ; eregA & eregC & imm1623=1
+{
+    if (eregC s> 32767) goto <clamphi>;
+    if (eregC s< -32768) goto <clamplo>;
+    eregA = eregC;
+    goto inst_next;
+<clamphi>
+    eregA = 32767;
+    goto inst_next;
+<clamplo>
+    eregA = -32768;
+}
+
 ###########################################################################################
 # Bitmasks
 ###########################################################################################
@@ -348,7 +384,39 @@
 {
     addr:4 = eregA + offset;
     *:4 addr = *:4 addr & notpackedimm12;
-} 
+}
+
+#
+# [rA+offset] &= packedimm12  (plain, non-inverted mask)
+#
+# Sibling of the notpackedimm12 form above: same addressing shape, but
+# ins0611=0x3e (a 6-bit opcode selector one below the notpackedimm12 form's
+# own ins0611=0x3f, i.e. ins0511=0x7e>>1) with a SIGNED 6-bit offset-index
+# (imm0005s, already scaled by 4) rather than the unsigned imm0004 used
+# above. Confirmed against all 3 real ground-truth occurrences, including
+# the imm2627=1 shift-form of packedimm12 producing values like 0xFF000000
+# and 0x10400000 that only that packedimm12 sub-case can represent.
+#
+:and [eregA+offset], #packedimm12 is group=7 & ins0611=0x3e & imm0005s ; eregA & packedimm12
+[ offset = imm0005s*4; ]
+{
+    addr:4 = eregA + offset;
+    *:4 addr = *:4 addr & packedimm12;
+}
+
+#
+# [rA+offset] ^= packedimm12
+#
+# Same family as the two AND forms above, one opcode slot down
+# (ins0611=0x3d) -- confirmed against the one real ground-truth occurrence
+# ("[r15+-128] ^= 0x1720", via packedimm12's imm2627=3 shift sub-case).
+#
+:xor [eregA+offset], #packedimm12 is group=7 & ins0611=0x3d & imm0005s ; eregA & packedimm12
+[ offset = imm0005s*4; ]
+{
+    addr:4 = eregA + offset;
+    *:4 addr = *:4 addr ^ packedimm12;
+}
 
 # Or [reg+imm8] |= bitmask
 # [rA+imm8] |= bitmask

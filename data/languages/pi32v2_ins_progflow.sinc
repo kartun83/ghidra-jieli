@@ -42,9 +42,66 @@
 	return [rete];
 }
 
+#
+# rtns
+#
+# Sibling of rts/rti/rtx/rte above (ins0012=0x0080-0x0083); ins0012=0x0084 is
+# unused and 0x0085 is this "return non-secure" opcode, confirmed against
+# every real ground-truth occurrence (bare mnemonic, no operand, exactly like
+# its siblings). This module has no TrustZone-style secure/non-secure state
+# modeled and there is no second link register anywhere in this ISA's
+# register file, so the only real-firmware-supportable p-code is the same
+# "return via rets" used by plain rts -- correct for decompiler control-flow
+# purposes (a real return) even though the true security-domain transition
+# semantics aren't modeled.
+#
+:rtns is group=0 & ins0012=0x0085
+{
+	return [rets];
+}
+
+###########################################################################################
+# Trigger
+###########################################################################################
+
+#
+# trigger
+#
+# A bare, no-operand system-trigger instruction (pcodeop already declared in
+# pi32v2.slaspec) -- confirmed against every real ground-truth occurrence
+# (4 addresses, byte-identical every time: group=7, ins0011=0x870, regA=0,
+# and the entire second word always zero). Pinning regA and the second word
+# to exactly what's evidenced rather than treating them as free operand
+# fields, since there's no real-firmware evidence either way varies.
+#
+:trigger is group=7 & ins0011=0x870 & regA=0 ; imm1631=0
+{
+    Trigger();
+}
+
 ###########################################################################################
 # Call
 ###########################################################################################
+
+#
+# callns rA
+#
+# Missing slot immediately before "swi" (0x00A) in this same 9-bit ins0412
+# opcode-family run (...,0x009=callns,0x00A=swi,0x00B=testset,0x00C=call,
+# 0x00D=goto,0x00E=cli rA,0x00F=sti rA,0x010=tbb,0x011=tbh...), confirmed
+# against every real ground-truth occurrence across all 16 registers
+# (callns r0/r1/r2/r5/r7/r8/r9/r10/r11/r12/r13/r14/r15 all decode to this
+# same ins0412=0x009 slot with only regA varying -- the missing r3/r4/r6
+# values are simply not evidenced in this firmware, not excluded). Modeled
+# with the same call semantics as plain "call rA" for the same reason noted
+# for rtns above: no secure/non-secure state is modeled in this module, and
+# a real call+return is what matters for decompiler control flow.
+#
+:callns regA is group=0 & ins0412=0x009 & regA
+{
+    rets = inst_next;
+    call [regA];
+}
 
 #
 # call rA
