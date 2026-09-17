@@ -36,6 +36,7 @@ addresses at once instead of chasing one-off mismatches.
 | + fifth round's register-operand shift/divide and `if`/`ifs` sibling fixes | 179 | 99.91% |
 | + sixth round's single-register bitmap push/pop, `packedimm12` 7th mode, and misc fixes | 68 | 99.97% |
 | + seventh round's fixes, cross-validated against a second real firmware image | 58 | **99.972%** |
+| + eighth round's fixes, found via a third real firmware image (147→111 gaps on that image; no change on this baseline) | 58 | 99.972% |
 
 Across all four rounds, previously-undecoded `pi32v2` encoding families were identified and
 added, each verified against every real occurrence in the ground truth (not a sample) and,
@@ -111,6 +112,14 @@ an instruction family this module had already mostly implemented:
   unsolved in earlier rounds, a missing `rtss` return opcode, and three `if`/`ifs` block-form
   immediate-comparison siblings (one new signed direct-immediate form, two confirmed duplicate-
   opcode slots of already-implemented comparisons). Zero regressions on either firmware image.
+- **An eighth round added a third real firmware image from the same chip family**, closing 36
+  addresses on that image (147 → 111; no change on the original baseline, since these opcodes
+  simply don't occur there), across a missing multiply-subtract-accumulate opcode (`mulsub.s`/
+  `.z`, sibling of the existing `muladd.s`/`.z`, confirmed via a 33-times-repeated unrolled
+  multiply-accumulate loop), a third confirmed value of an apparently-inert field on an existing
+  `if` comparison opcode, and one more duplicate-opcode slot in the `if`/`packedimm12` family.
+  A fourth candidate firmware image was found to use a different, unsupported container
+  sub-format and was left for a future round. Zero regressions on any of the three images.
 
 Full derivation, confidence levels, and the remaining (lower-impact, harder) open gaps are
 documented in [`tools/gap-analysis/PI32V2_SLEIGH_GAPS.md`](tools/gap-analysis/PI32V2_SLEIGH_GAPS.md).

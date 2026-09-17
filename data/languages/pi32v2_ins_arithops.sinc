@@ -213,6 +213,30 @@
     edregA =edregA + C*B;
 }
 
+#
+# rB_rA -= rC * rD (signed)
+# => mulsub.s rB_rA, rC, rD
+#
+:mulsub.s edregA, eregB, eregC is group=7 & ins0011=0x1fe ; edregA & eregB & eregC & imm1619=0 & imm2828=1
+{
+    C:8 = sext(eregC);
+    B:8 = sext(eregB);
+
+    edregA = edregA - C*B;
+}
+
+#
+# rB_rA -= rC * rD (unsigned)
+# => mulsub.s rB_rA, rC, rD
+#
+:mulsub.s edregA, eregB, eregC is group=7 & ins0011=0x1fe ; edregA & eregB & eregC & imm1619=0 & imm2828=0
+{
+    C:8 = zext(eregC);
+    B:8 = zext(eregB);
+
+    edregA = edregA - C*B;
+}
+
 
 ###########################################################################################
 # Subtract

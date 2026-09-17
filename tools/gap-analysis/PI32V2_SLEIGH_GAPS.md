@@ -1134,3 +1134,83 @@ module. No synthetic compilation was needed — every fix had enough independent
 confirmation on its own. No new tool installation beyond what was already documented for
 generating ground-truth disassembly in prior rounds; no device I/O, no MIDI/USB/OTA touched at
 any point.
+
+## Eighth round
+
+### A third real firmware image as an evidence source
+
+Added a **third real firmware image from the same chip family** (same JLFS container/unpack
+format, same `0x2000120` load address, a third distinct application binary), disassembled with
+the same real vendor `objdump` toolchain. A fourth candidate image was also on hand but uses a
+visibly different container sub-format (a plaintext chip/format marker sits where the expected
+flash header should be) that the existing unpack tooling doesn't parse — left unexplored this
+round rather than reverse-engineering a new container format on top of the SLEIGH work.
+
+### Results this round
+
+| Firmware | Before | After |
+|---|---|---|
+| Original (used by all prior rounds) | 58 gap addresses (99.972%) | 58 gap addresses (unchanged) |
+| Second image (from the seventh round) | 77 gap addresses | 77 gap addresses (unchanged) |
+| Third image (new this round) | 147 gap addresses | 111 gap addresses |
+
+Zero regressions on any of the three firmware images.
+
+### Fix #32: `mulsub.s`/`mulsub.z`, missing subtract-accumulate sibling of `muladd.s`
+(`pi32v2_ins_arithops.sinc`)
+
+`ins0011=0x1fe`, one opcode above the already-implemented `muladd.s`/`.z` pair at `0x1fc`
+(`edregA = edregA + eregB*eregC`, signed/unsigned selected by the same `imm2828` bit). The
+subtract form (`edregA = edregA - eregB*eregC`) was simply missing. Confirmed against 33 real
+occurrences, all in one evenly-spaced (52-byte stride) unrolled loop — a hand-unrolled
+multiply-accumulate filter — with byte-identical register allocation at every iteration.
+Verified this is a genuinely separate opcode, not a delay-slot/parallel-issue decoding
+artifact: the existing `muladd.s` immediately adjacent in the same loop (also using the
+group=7 parallel-issue path, `ins1112=0b10`) already decodes correctly, isolating the gap to
+the missing `0x1fe` opcode itself, not the parallel-issue mechanism.
+
+### Fix #33: `if (regA < eregC)` third confirmed `imm1623` value (`pi32v2_ins_ifthenelse.sinc`)
+
+`ins0411=0x99` already had two confirmed sibling constructors differing only in an apparently
+inert `imm1623` field (`0x00` and `0x05`, both giving identical "less-than" semantics). This
+round's evidence adds a third confirmed value (`0x74`, i.e. 116) with the same semantics,
+reinforcing that this field isn't semantically load-bearing for this opcode — added as an
+explicit third value rather than widening the match, consistent with how the first two were
+handled.
+
+### Fix #34: `if (regA > #packedimm12)` duplicate opcode slot (`pi32v2_ins_ifthenelse.sinc`)
+
+`ins0411=0xC2`, one below the existing `0xC3`. Confirmed against 2 real occurrences (immediate
+value 254 both times), decoding identically to `0xC3` via `packedimm12`'s plain pass-through
+case (`imm2427=0`). Same duplicate-opcode-slot pattern as the `0xCA`/`0xCB` and `0xEA`/`0xEB`
+pairs from the seventh round.
+
+### Newly discovered, not yet fixed (deferred this round)
+
+- **The `(ssat,x2)` half-register family** gained more data points from the third firmware
+  image, but the new evidence *adds* variety rather than resolving the open question: this
+  round's occurrences include forms with register-pair destinations, single-register
+  destinations, and — new this round — a form with **no** `.h`/`.l` half-register split at all
+  operating on full register pairs. This confirms the family has more distinct sub-encodings
+  than previously known, reinforcing rather than closing the seventh round's decision to defer
+  it pending dedicated half-register SLEIGH machinery.
+- **The separate `group=7`-based special-register push/pop mechanism** (`{pc} = [sp++]`,
+  `[--sp] = {sp, ssp, usp, icfg, psr, rets, retx, rete, reti}`) picked up one more confirming
+  occurrence of the "pop pc" form (now 2 total) but the "push nine special registers" form is
+  still only a single sample — not enough to safely derive the bitmap-to-register-list mapping
+  for a family that touches stack-pointer arithmetic. Still deferred.
+- The wide-immediate `if (rX ?? imm) goto ...` family remains untouched this round; no new data
+  points against it were found in the third image.
+
+### Files touched this round
+
+- `data/languages/pi32v2_ins_arithops.sinc` (`mulsub.s`/`mulsub.z`)
+- `data/languages/pi32v2_ins_ifthenelse.sinc` (`if (regA < eregC)` third `imm1623` value,
+  `if (regA > #packedimm12)` duplicate slot)
+- `data/languages/pi32v2.sla` (recompiled)
+
+### Non-invasive-first compliance (this round)
+
+Static analysis and headless Ghidra batch-disassembly only, against three real firmware images
+and this fork's own SLEIGH module. No synthetic compilation needed. No device I/O, no MIDI/USB/
+OTA touched at any point.
