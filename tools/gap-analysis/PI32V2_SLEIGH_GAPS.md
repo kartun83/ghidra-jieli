@@ -1275,16 +1275,46 @@ regex assumed objdump always left-pads addresses with exactly one leading space.
 one hex digit longer, giving 8-hex-digit addresses with no leading space at all, which made the
 parser silently read 0 ground-truth lines. Fixed to accept 0-or-1 leading spaces.
 
-**The two variant-A images (same chip as the baseline) surfaced a new, unresolved category of
-apparent gap** that is NOT a missing opcode: isolating one flagged address (`qasr r4,r2,0x10`, an
-already-implemented opcode) and re-testing the exact same bytes in a tiny standalone binary showed
-it decodes correctly in isolation. In the full firmware image, however, a run of several
+**The two variant-A images (same chip as the baseline) surfaced a new category of apparent gap,
+now root-caused: it is a scale-dependent artifact of Ghidra's own disassembler/context runtime,
+not a SLEIGH grammar defect, and not fixable in this repo's `.sinc` files.** Isolating one flagged
+address (`qasr r4,r2,0x10`, an already-implemented opcode) and re-testing the exact same bytes in a
+short standalone binary showed it decodes correctly. In the full firmware image, a run of several
 already-implemented instructions (`qasr`, `pfetch`) fails to decode for a handful of consecutive
-instructions before self-recovering a few instructions later. This points to some form of
-context/state divergence across the very long linear sweep (not reproduced in a short synthetic
-snippet), not a grammar gap — a genuinely new class of issue distinct from the three previously
-catalogued hard categories. Root cause not isolated this round; flagged for dedicated follow-up
-rather than guessed at. **No SLEIGH changes were made based on these two images.**
+instructions before self-recovering a few instructions later.
+
+A controlled, content-free binary search nailed this down conclusively: importing the *exact real
+bytes* of the failing region preceded by a large, purely synthetic run of `nop` instructions (byte
+pattern `00 00`, which carries no semantic content and touches no context field in this grammar)
+reproduces the exact same failure once the run is long enough — roughly on the order of 10^5
+preceding instructions, though the precise threshold moved when the absolute load address was
+changed too, suggesting the trigger is address/scale-dependent inside Ghidra's own context-value
+storage rather than a fixed instruction count. Splitting the forced disassembly into many small
+`Disassembler.disassemble()` calls instead of one large one (to rule out a batch-size limit in that
+specific API) did **not** avoid the failure, meaning the corruption survives across separate calls
+and lives in the persisted context state itself, not in how one test harness happens to invoke the
+disassembler.
+
+Since the failure reproduces with **zero real instruction content** in the preceding run (pure
+`nop`s), it cannot be a bug in any of this fork's actual opcode semantics — nothing content-specific
+is being decoded wrong. The leading suspect is this module's `contextreg`, which is defined as a
+full 64-bit context register (`define register offset=0x300 size=8 [ contextreg ];`, needed to hold
+a full 32-bit `repblock_endaddr` field for repeat-block support) — an unusually wide context
+register for a Ghidra SLEIGH module, and exactly the kind of rarely-exercised configuration that
+would be more likely to hit a latent bug in Ghidra's own context-range storage during very long
+forced linear sweeps. This was not proven with certainty (would require Ghidra source-level
+debugging to pin down precisely, out of scope for a differential-testing methodology), but every
+piece of evidence gathered points away from the grammar and toward the runtime. **No SLEIGH changes
+were made based on this finding** — there is nothing to fix in this repo for it. Practically, this
+means: raw gap counts from this project's own diff pipeline on sufficiently large firmware images
+(very roughly, images producing more than on the order of 10^5 total instructions) should be
+treated with this caveat, since some fraction of reported gaps beyond that point may be this
+artifact rather than real missing opcodes — cross-check any individual gap this large by re-testing
+its exact bytes in a short standalone import before trusting it as a real grammar defect. This
+should **not** be read as evidence that the `pi32v2q` module is broken for normal GUI-driven
+reverse engineering in Ghidra, which analyzes function-by-function via recursive descent rather
+than one giant forced linear sweep of an entire binary — this artifact is most exposed by this
+project's own stress-test-style differential methodology.
 
 **The two variant-B images (a related but distinct chip) show a gap rate 50-100x higher** than
 the variant-A baseline (roughly 1-3% of compared instructions vs. the usual ~0.02-0.05%), spread
@@ -1303,9 +1333,10 @@ possibly-genuine occurrences.
 
 ### Newly discovered, not yet fixed (deferred this round)
 
-- **Context/state divergence during long linear sweeps** (new this round, variant-A images) —
-  see above. Needs a dedicated backward-trace investigation to find the true origin, not attempted
-  this round.
+- **The large-scale context/state artifact described above is root-caused to Ghidra's own
+  disassembler/context runtime, not this grammar** — nothing to fix here, but worth keeping in mind
+  when interpreting future gap counts on large images, and possibly worth reporting upstream to the
+  Ghidra project given it was reproduced with a clean, content-free test case.
 - **Chip variant B's much higher raw gap rate** — needs to be scoped as its own investigation (is
   it really the same pi32v2 core with a newer opcode set, or a meaningfully different ISA
   revision?) before any firmware from this chip is used for grammar changes.

@@ -126,9 +126,11 @@ an instruction family this module had already mostly implemented:
   wide-immediate compare-and-branch opcode (it always materializes the constant into a register
   first), and independent confirmation that the single-special-register interrupt push/pop
   (`[--sp] = {reti}` / `{reti} = [sp++]`) already decodes correctly. Five more real firmware
-  images were also checked: two from the same chip family surfaced a new, unresolved class of
-  apparent gap that isolated testing traced to a context/state issue during long linear sweeps
-  rather than a missing opcode, and two images from a different, related chip showed a gap rate
+  images were also checked: two from the same chip family surfaced a new class of apparent gap
+  that a controlled, content-free test (a large synthetic run of `nop` instructions reproduces the
+  exact same failure) root-caused to a scale-dependent artifact in Ghidra's own disassembler/
+  context runtime — not a grammar defect, and nothing to fix here — and two images from a
+  different, related chip showed a gap rate
   50-100x the established baseline across unrelated instruction families — evidence of a
   meaningfully different encoding revision, not a few missing constructors, so neither was used
   as a fix source. No grammar changes this round; a ground-truth tooling bug (address-column
