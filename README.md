@@ -15,14 +15,9 @@ nothing to offer you there.
 
 ## Why this fork exists
 
-Static SLEIGH modules for obscure ISAs are usually validated by eyeballing a few functions and
-hoping the rest holds up. That's not good enough when you're trying to reverse-engineer real
-consumer-device firmware (in this case, a JieLi AC791N/WL82-based MIDI controller) and need to
-trust the disassembly you're reading.
-
-This fork's `pi32v2` support was instead validated **address-by-address against 209,161 real
+This fork's `pi32v2` support was validated **address-by-address against 209,161 real
 instructions**, decoded independently by JieLi's own `clang`/`objdump` toolchain running
-against an actual shipped firmware binary. A differential-testing harness
+against a real shipped firmware binary. A differential-testing harness
 (`tools/gap-analysis/`) walks both disassemblies in lockstep, flags every address where they
 disagree (wrong length, undecoded, or missing), and ranks the disagreements by how many real
 addresses share the same byte encoding — so a single SLEIGH fix can resolve thousands of
