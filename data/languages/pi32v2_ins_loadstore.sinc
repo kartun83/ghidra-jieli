@@ -145,6 +145,24 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
     eregA = *:4 eregB;
 }
 
+#
+# r{n+1}_r{n} = [++rB=rC]  -- paired-register (doubleword) sibling of
+# addldw above, in the neighboring 0xC5 opcode family (existing ldw/sdw
+# offset forms already live at ins0411=0xC5) rather than 0xCD, using the
+# same ins0003=0xC register-preincrement selector and the same imm1617=2
+# load-vs-store discriminator convention as addldw/addsdw.
+#
+# Confirmed against 3 real occurrences (all load direction, amount register
+# r2, base register r0, only the destination pair varies); a store sibling
+# at imm1617=3 is a plausible analogy (mirroring addsdw) but was not
+# observed in real firmware and is deliberately NOT added here.
+#
+:addldw edregA, eregB, eregC is group=7 & ins0411=0xC5 & ins0003=0xC ; edregA & eregB & eregC & imm1617=2
+{
+    eregB = eregB + eregC;
+    edregA = *:8 eregB;
+}
+
 # Load double word into register
 # rA = [rB+]
 #
@@ -359,6 +377,131 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
     eregA = sext(*:2 addr);
 }
 
+###########################################################################################
+# Load/Store Halfword, pre-increment-by-immediate addressing: [++rB=#imm]
+###########################################################################################
+#
+# This whole family (ins0011=0xd58/0xd59/0xd5b/0xd5c/0xd5d below) shares a
+# quirk not seen in the byte pre-increment family (0xe58/0xe59 above): since
+# a halfword access's immediate is always even, bit0 of the low nibble
+# (imm1616) is never a real magnitude bit, so hardware reuses it as an
+# explicit load(0)/store(1) direction flag instead -- confirmed by 4 real
+# store occurrences whose raw (imm2427<<4)|imm1619 nibble math was always
+# off by exactly +1 from the expected (always-even) immediate until that
+# low bit is masked off. All variants confirmed against real firmware.
+#
+
+#
+# rA = h[++rB=#immhw] (u)  /  h[++rB=#immhw] = rA   -- 0-254 range
+#
+:lh.z eregA, [++eregB=#immhw] is group=7 & ins0011=0xd58 ; eregA & eregB & imm1619 & imm2427 & imm1616=0
+[ immhw = (imm2427 << 4) | imm1619; ]
+{
+    eregB = eregB + immhw;
+    eregA = zext(*:2 eregB);
+}
+
+:sh eregA, [++eregB=#immhw] is group=7 & ins0011=0xd58 ; eregA & eregB & imm1619 & imm2427 & imm1616=1
+[ immhw = (imm2427 << 4) | (imm1619 - 1); ]
+{
+    eregB = eregB + immhw;
+    *:2 eregB = eregA:2;
+}
+
+#
+# rA = h[++rB=#immhw] (u) -- extended range (256-510); only the load
+# direction has been observed for this opcode in real firmware.
+#
+:lh.z eregA, [++eregB=#immhw] is group=7 & ins0011=0xd59 ; eregA & eregB & imm1619 & imm2427 & imm1616=0
+[ immhw = 0x100 + ((imm2427 << 4) | imm1619); ]
+{
+    eregB = eregB + immhw;
+    eregA = zext(*:2 eregB);
+}
+
+#
+# rA = h[++rB=#simmhw] (u) -- negative-immediate sibling of 0xd58; only the
+# load direction has been observed for this opcode in real firmware.
+#
+:lh.z eregA, [++eregB=#simmhw] is group=7 & ins0011=0xd5b ; eregA & eregB & imm1619 & imm2427
+[ simmhw = -((((1<<8) | (imm2427 << 4) | imm1619)^0x1ff) + 1); ]
+{
+    eregB = eregB + simmhw;
+    eregA = zext(*:2 eregB);
+}
+
+#
+# rA = h[++rB=#immhw] (s) -- signed-load counterpart to 0xd58; only the load
+# direction has been observed for this opcode in real firmware.
+#
+:lh.s eregA, [++eregB=#immhw] is group=7 & ins0011=0xd5c ; eregA & eregB & imm1619 & imm2427 & imm1616=0
+[ immhw = (imm2427 << 4) | imm1619; ]
+{
+    eregB = eregB + immhw;
+    eregA = sext(*:2 eregB);
+}
+
+#
+# rA = h[++rB=#immhw] (s) -- extended range (256-510) signed-load
+# counterpart to 0xd59; only the load direction has been observed.
+#
+:lh.s eregA, [++eregB=#immhw] is group=7 & ins0011=0xd5d ; eregA & eregB & imm1619 & imm2427 & imm1616=0
+[ immhw = 0x100 + ((imm2427 << 4) | imm1619); ]
+{
+    eregB = eregB + immhw;
+    eregA = sext(*:2 eregB);
+}
+
+###########################################################################################
+# Load/Store Halfword, register pre/post-increment addressing:
+# [++rB=rC] (pre) and [rB++=rC] (post), full r0-r15 x r0-r15 range.
+###########################################################################################
+#
+# Sibling of the byte forms at 0xedc above (pre-increment) and of the
+# group=0/ins1015=0x3 short encoding above (post-increment, but that one is
+# restricted to an r8-r15 stride register; this 32-bit encoding covers the
+# full r0-r15 range for both operands, needed whenever the stride register
+# is r0-r7).
+#
+
+#
+# rA = h[++rB=rC] (u/s)  /  h[++rB=rC] = rA
+#
+:lh.z eregA, [++eregB=eregC] is group=7 & ins0011=0xddc ; eregA & eregB & eregC & imm1619=0
+{
+    eregB = eregB + eregC;
+    eregA = zext(*:2 eregB);
+}
+
+:lh.s eregA, [++eregB=eregC] is group=7 & ins0011=0xddc ; eregA & eregB & eregC & imm1619=2
+{
+    eregB = eregB + eregC;
+    eregA = sext(*:2 eregB);
+}
+
+:sh eregA, [++eregB=eregC] is group=7 & ins0011=0xddc ; eregA & eregB & eregC & imm1619=1
+{
+    eregB = eregB + eregC;
+    *:2 eregB = eregA:2;
+}
+
+#
+# rA = h[rB++=rC] (u)  /  h[rB++=rC] = rA
+#
+# Only the unsigned-load and store directions have been observed in real
+# firmware for this post-increment opcode (no signed-load sibling seen).
+#
+:lh.z eregA, [eregB++=eregC] is group=7 & ins0011=0xdde ; eregA & eregB & eregC & imm1619=0
+{
+    eregA = zext(*:2 eregB);
+    eregB = eregB + eregC;
+}
+
+:sh eregA, [eregB++=eregC] is group=7 & ins0011=0xdde ; eregA & eregB & eregC & imm1619=1
+{
+    *:2 eregB = eregA:2;
+    eregB = eregB + eregC;
+}
 
 ###########################################################################################
 # Load Byte (sign-extend)
@@ -387,6 +530,19 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
 }
 
 #
+# rA = b[rB+simm8] (s) -- negative-offset sibling of 0xe54 above.
+#
+# Confirmed against 5 real occurrences, same negative-immediate formula as
+# the unsigned 0xe51 constructor above.
+#
+:lb.s eregA, [eregB+simm8] is group=7 & ins0011=0xe55 ; eregA & eregB & imm1619 & imm2427
+[ simm8 = -((((1<<8) | (imm2427 << 4) | imm1619)^0x1ff) + 1); ]
+{
+    addr:4 = eregB + simm8;
+    eregA = sext(*:1 addr);
+}
+
+#
 # rA = b[rB+rC] (s)
 # => lb.z rA, [rB + rC]
 #
@@ -394,6 +550,21 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
 {
 	local addr:4 = eregB + eregC;
 	eregA = sext(*:1 addr);
+}
+
+#
+# rA = b[rB ++= imm8] (u) -- unsigned counterpart to lb.s above (0xed4).
+#
+# Confirmed against 52 real occurrences (the single largest gap bucket in
+# this session's diff run), same imm8 = (imm2427<<4)|imm1619 split-nibble
+# formula as lb.s.
+#
+:lb.z eregA, [eregB ++= #imm8] is group=7 & ins0011=0xed0 ; eregA & eregB & imm1619 & imm2427
+[ imm8 = (imm2427 << 4) | imm1619; ]
+{
+    addr:4 = eregB + imm8;
+    eregA = zext(*:1 addr);
+    eregB = eregB + imm8;
 }
 
 ###########################################################################################
@@ -470,6 +641,24 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
 [ imm16 = (imm2427 << 8) | imm1619; ]
 {
 	local addr:4 = eregB + imm16;
+	eregA = zext(*:1 addr);
+}
+
+#
+# rA = b[rB+simm8] (u) -- negative-offset sibling of 0xe50 above.
+# => lb.z rA, [rB + simm8]
+#
+# Confirmed against 22 real occurrences in app_full_disasm_llvm.txt (all
+# negative displacements). The 9-bit magnitude is stored as
+# ((1<<8)|(imm2427<<4)|imm1619) one's-complemented then negated -- the same
+# formula already used below by the existing lb.z pre-increment negative-imm
+# constructor at ins0011=0xe59, just applied here to a plain (non-writeback)
+# offset instead of a pre-increment.
+#
+:lb.z eregA, [eregB + simm8] is group=7 & ins0011=0xe51 ; eregA & eregB & imm1619 & imm2427
+[ simm8 = -((((1<<8) | (imm2427 << 4) | imm1619)^0x1ff) + 1); ]
+{
+	local addr:4 = eregB + simm8;
 	eregA = zext(*:1 addr);
 }
 
@@ -782,6 +971,21 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
 }
 
 #
+# b[rB+simm8] = rA -- negative-offset sibling of the store above (0xe52).
+#
+# Confirmed against 14 real occurrences, same negative-immediate formula as
+# the lb.z/lb.s 0xe51/0xe55 constructors. Uses the full 4-bit eregA (not the
+# 3-bit eregAl the 0xe52 sibling above uses) since real occurrences include
+# r8-r15 source registers (e.g. "b[r1+-4] = r9").
+#
+:sb eregA, [eregB + simm8] is group=7 & ins0011=0xe53 ; eregA & imm2427 & eregB & imm1619
+[ simm8 = -((((1<<8) | (imm2427 << 4) | imm1619)^0x1ff) + 1); ]
+{
+	local addr:4 = eregB + simm8;
+	*:1 addr = eregA:1;
+}
+
+#
 # b[rB+rC] = rA
 # => sb rA, [rB + rC]
 #
@@ -810,4 +1014,31 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
 {
     eregB = eregB + eregA;
     *:1 eregB = eregC:1;
+}
+
+#
+# b[++rB=#imm8] = rA -- store sibling of lb.z's pre-increment loads at
+# 0xe58/0xe59 above (same addressing mode, opposite direction).
+#
+# Confirmed against 29 real occurrences (positive immediates only observed
+# at this opcode), same imm8 = (imm2427<<4)|imm1619 formula as 0xe58.
+#
+:sb eregA, [++eregB=#imm8] is group=7 & ins0011=0xe5a ; eregA & eregB & imm1619 & imm2427
+[ imm8 = (imm2427 << 4) | imm1619; ]
+{
+    eregB = eregB + imm8;
+    *:1 eregB = eregA:1;
+}
+
+#
+# b[++rB=#imm8] = rA -- negative-immediate sibling of 0xe5a above, same
+# addressing mode/formula relationship as lb.z's 0xe58/0xe59 pair.
+#
+# Confirmed against 8 real occurrences.
+#
+:sb eregA, [++eregB=#imm8] is group=7 & ins0011=0xe5b ; eregA & eregB & imm1619 & imm2427
+[ imm8 = -((((1<<8) | (imm2427 << 4) | imm1619)^0x1ff) + 1); ]
+{
+    eregB = eregB + imm8;
+    *:1 eregB = eregA:1;
 }
