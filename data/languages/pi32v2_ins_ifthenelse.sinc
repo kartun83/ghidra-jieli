@@ -119,6 +119,33 @@
 <end>
 }
 
+#
+# ifs (rA <= #packedimm12) { ... } else { ... } -- duplicate opcode slot
+# (ins0411=0xEA, one below 0xEB above) confirmed against real ground truth
+# ("ifs (r8 <= 127)", packedimm12's plain imm2427=0 sub-case) decoding
+# identically to 0xEB in every observed bit. This ISA has several confirmed
+# duplicate-opcode pairs already (ssync/btbclr's extra slots, packedimm12's
+# own imm2427=1/2 duplicate) -- treated the same way here rather than
+# guessing at a semantic difference not evidenced by the one real sample.
+#
+:ifs (regA <= #packedimm12) { is group=7 & ins0411=0xEA & regA ; packedimm12 & ifcnt & elsecnt
+[
+    # Save instructions count for then and else branches
+    thenbranch=ifcnt+1; globalset(inst_next, thenbranch);
+    elsebranch=elsecnt; globalset(inst_next, elsebranch);
+
+    ifblock=1; globalset(inst_next, ifblock);
+]
+{
+    if (regA s> packedimm12) goto <else>;
+    cres=1;
+    goto <end>;
+
+<else>
+    cres=0;
+<end>
+}
+
 
 #
 # ifs (rA >= #packedimm12) { ... } else { ... }
@@ -154,6 +181,33 @@
 ]
 {
     if (regA s< imm1627) goto <else>;
+    cres=1;
+    goto <end>;
+
+<else>
+    cres=0;
+<end>
+}
+
+#
+# ifs (rA > #imm1627s) { ... } else { ... } (signed)
+#
+# Sibling of "ifs (regA >= #imm1627)" above (0xD3) -- ins0411=0xE3 was
+# unused, confirmed against real ground truth (FM-1 firmware: "ifs (r7 >
+# -1)", "ifs (r1 > -1)", "ifs (r3 > 512)" -- values need the signed 12-bit
+# field, not packedimm12; -1 in particular only comes out right as a plain
+# sign-extended imm1627s, not any packedimm12 sub-case).
+#
+:ifs (regA > #imm1627s) { is group=7 & ins0411=0xE3 & regA ; imm1627s & ifcnt & elsecnt
+[
+    # Save instructions count for then and else branches
+    thenbranch=ifcnt+1; globalset(inst_next, thenbranch);
+    elsebranch=elsecnt; globalset(inst_next, elsebranch);
+
+    ifblock=1; globalset(inst_next, ifblock);
+]
+{
+    if (regA s<= imm1627s) goto <else>;
     cres=1;
     goto <end>;
 
@@ -208,6 +262,32 @@
 # if (rA <= #packedimm12) { ... } else { ... }
 #
 :if (regA <= #packedimm12) { is group=7 & ins0411=0xCB & regA ; packedimm12 & ifcnt & elsecnt
+[
+    # Save instructions count for then and else branches
+    thenbranch=ifcnt+1; globalset(inst_next, thenbranch);
+    elsebranch=elsecnt; globalset(inst_next, elsebranch);
+
+    ifblock=1; globalset(inst_next, ifblock);
+]
+{
+    if (regA > packedimm12) goto <else>;
+    cres=1;
+    goto <end>;
+
+<else>
+    cres=0;
+<end>
+}
+
+#
+# if (rA <= #packedimm12) { ... } else { ... } -- duplicate opcode slot
+# (ins0411=0xCA, one below 0xCB above), confirmed against real ground truth
+# ("if (r1 <= 4096)" and "if (r1 <= 134217728)") -- both values decode
+# exactly via packedimm12's existing shift-based sub-cases (imm2627=3 and
+# imm2627=1 respectively), identically to 0xCB. Same duplicate-opcode
+# pattern as 0xEA/0xEB below.
+#
+:if (regA <= #packedimm12) { is group=7 & ins0411=0xCA & regA ; packedimm12 & ifcnt & elsecnt
 [
     # Save instructions count for then and else branches
     thenbranch=ifcnt+1; globalset(inst_next, thenbranch);

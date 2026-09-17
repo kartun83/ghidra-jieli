@@ -1007,3 +1007,130 @@ image and this fork's own SLEIGH module, plus fixing the reproduction/base-addre
 (no code changes, purely a local verification-pipeline correction). No synthetic compilation
 was needed this round — every fix had enough independent real-firmware confirmation on its own.
 No new tool installation, no device I/O, no MIDI/USB/OTA touched at any point.
+
+## Seventh round
+
+### A second real firmware image as an evidence source
+
+Every prior round validated exclusively against one real firmware image. This round added a
+**second, independently-sourced real firmware image from the same chip family** (same JLFS
+container/unpack format, same `0x2000120` load address, different application code — a
+different product built on the same SoC), disassembled with the same real vendor
+LLVM-derived `objdump` toolchain used for the original ground truth. This gave several opcode
+families that were previously "single occurrence, not enough evidence to generalize" 5-14
+independent confirming occurrences each, which is what made most of the fixes below possible —
+this is the same reproducible methodology as every other round (real toolchain disassembly vs.
+this fork's own SLEIGH output), just against a second binary.
+
+### Results this round
+
+| Firmware | Before | After |
+|---|---|---|
+| Original (used by all prior rounds) | 68 gap addresses (99.97%) | 58 gap addresses (99.972%) |
+| Second image (new this round) | 116 gap addresses | 77 gap addresses |
+
+Zero regressions on either firmware image (verified via full re-diff after every batch of
+fixes — `BAD`/`LEN_MISMATCH`/`MISSING` counts only ever decreased or held steady, never
+increased).
+
+### Fix #25: doubleword pre-increment store with immediate offset (`pi32v2_ins_loadstore.sinc`)
+
+The `ldw`/`sdw`/`addldw` family at `ins0411=0xC5` already had load-with-offset, store-with-
+offset, and register-stride pre-increment load slots (`imm1617=0/1/2`); the immediate-offset
+pre-increment **store** at `imm1617=3` was flagged in a comment as "a plausible analogy...
+but not observed." Confirmed this round against 3 real occurrences (two distinct `imm11`
+values, 696 and 872, both register-pair destinations `r1_r0`/`r3_r2` seen at the same
+immediate) — same `imm11 = (imm0002s<<8)|(imm2427<<4)|(imm1819<<2)` bit-packing as the existing
+single-register `addsdw` immediate form, just in the `0xC5` family and storing 8 bytes instead
+of 4.
+
+### Fix #26: post-increment register-stride byte store (`pi32v2_ins_loadstore.sinc`)
+
+`ins0011=0xede`, sibling of the pre-increment register-stride byte store already at `0xedc`
+(same relationship as the halfword family's `0xddc`/`0xdde` pre/post pair). Confirmed against
+7 real occurrences.
+
+### Fix #27: fixed-offset post-increment stores, siblings of the existing `-16` load
+(`pi32v2_ins_loadstore.sinc`)
+
+When the `[rB++=-16]` fixed-offset load was added in an earlier round, its comment flagged "a
+real firmware store sibling exists at the same `ins0011`... with offsets seen at -8" as an
+unresolved formula. Confirmed this round: `imm1719=4` (vs. the load's `imm1719=0`) gives
+exactly -8, at the same `ins0011=0xcdf` escape opcode, discriminated by the same `imm1616`
+direction bit used elsewhere in this family. Also added two halfword siblings (`h[rB++=-4]`,
+`h[rB++=-260]`) as fully-pinned single-occurrence escapes (each confirmed byte-exact, but with
+only one sample per opcode there isn't yet enough evidence to tell whether the differing low
+opcode bit or the base register drives the -4-vs-260 difference, so each is its own pinned
+constructor rather than a guessed general formula — see the "still open" section).
+
+### Fix #28: `rtss` (`pi32v2_ins_progflow.sinc`)
+
+`ins0012=0x0084`, previously assumed unused, sits immediately before `rtns` (`0x0085`, "return
+non-secure") in the same bare-mnemonic return-instruction opcode run. Confirmed against 3 real
+occurrences; modeled with the same "return via `rets`" p-code as its siblings, for the same
+no-TrustZone-modeled reason already documented for `rtns`.
+
+### Fixes #29-31: `if`/`ifs` block-form immediate comparison siblings (`pi32v2_ins_ifthenelse.sinc`)
+
+- `ifs (regA > #imm1627s) { ... }` at `ins0411=0xE3` — the missing "greater-than" signed
+  direct-immediate sibling of the existing `>=`/`<` pair (`0xD3`/`0xDB`... `0xDA`). Confirmed
+  against real occurrences including a `-1` comparison, which only comes out right through the
+  plain signed 12-bit field (`imm1627s`), not any `packedimm12` sub-case — an important
+  disambiguator since the byte pattern could otherwise look `packedimm12`-shaped.
+- `if (regA <= #packedimm12) { ... }` at `ins0411=0xCA` — confirmed via two real values (4096
+  and 134217728) that both decode exactly through `packedimm12`'s existing shift-based
+  sub-cases, identically to the already-implemented `0xCB`. Treated as a duplicate opcode slot
+  of `0xCB`, consistent with this ISA's other confirmed duplicate-opcode pairs (`ssync`/
+  `btbclr`'s extra slots, `packedimm12`'s own `imm2427=1`/`2` duplicate).
+- `ifs (regA <= #packedimm12) { ... }` at `ins0411=0xEA` — same duplicate-slot relationship to
+  the existing `0xEB`, confirmed via one real value (127) that decodes identically either way.
+
+### Newly discovered, not yet fixed (deferred this round)
+
+- **The `(ssat,x2)` dual-register/half-register parallel-arithmetic family** now has far more
+  evidence (9+ addresses across at least 4 distinct sub-opcodes in the second firmware image,
+  up from the long-standing "4 addresses, 2 patterns"), and a partial hypothesis was derived
+  (a single bit, `imm1616`, appears to switch all operands between `.h`/`.l` sub-register halves
+  for the single-register forms at `ins0011=0x51f`/`0x54f`/`0x55f`) — but the register-pair
+  forms at `ins0011=0x573` show *mixed* `.h`/`.l` selection across their two operand groups in
+  the same instruction, meaning at least one more selector bit is involved that wasn't
+  isolated this round. This ISA has no existing half-register (`.h`/`.l`) sub-piece machinery
+  anywhere in the SLEIGH file yet, so getting this wrong risks incorrect p-code rather than
+  just a length mismatch — deferred pending either more examples or a targeted synthetic-
+  compilation reproducer.
+- **A wide-immediate memory-operand AND family** at `ins0011=0xff3`/`0xff4` (`[r15+-48] &=
+  0x31FFFFFF`, `[r15+-52] &= 0xFFFFFE01`) — a new opcode area distinct from the existing
+  `and [eregA+offset],#packedimm12`/`#notpackedimm12` constructors. Only 2 occurrences, with
+  masks that don't fit the existing compressed-immediate subtables' simple byte-repeat forms;
+  not enough evidence yet to derive the encoding with confidence.
+- **A completely separate `group=7`-based special-register push/pop mechanism** at
+  `ins0011=0x950`-`0x958` (`{pc} = [sp++]`, `[--sp] = {sp, ssp, usp, icfg, psr, rets, retx,
+  rete, reti}`) — distinct from the existing, already-comprehensive `group=0`/`ins0412=0x04x`
+  multi-register range-list/special-register-list family documented in the sixth round's
+  section above. Only 1 occurrence each; a wrong stack-pointer-arithmetic model here is
+  higher-risk than most gaps, so deferred pending more evidence.
+- **The wide-immediate `if (rX ?? imm) goto ...` family** (still the largest single deferred
+  item, now with more confirmed offset values — 0x10/0x14/0x18/0x9c — across the LEN_MISMATCH
+  addresses) remains deferred for the same reason as every prior round: extending the if/then/
+  else state machine here risks regressing the existing 32-bit `or`-immediate constructor.
+  Notably, even the real vendor `objdump` prints a literal `??` for this family's comparison
+  operator instead of a real mnemonic, suggesting the authoritative toolchain itself doesn't
+  fully resolve this encoding either — a data point worth keeping in mind before attempting it.
+
+### Files touched this round
+
+- `data/languages/pi32v2_ins_loadstore.sinc` (doubleword pre-increment immediate store,
+  post-increment register-stride byte store, fixed-offset post-increment stores)
+- `data/languages/pi32v2_ins_progflow.sinc` (`rtss`)
+- `data/languages/pi32v2_ins_ifthenelse.sinc` (signed `>` direct-immediate block form, two
+  duplicate-opcode `<=` block-form slots)
+- `data/languages/pi32v2.sla` (recompiled)
+
+### Non-invasive-first compliance (this round)
+
+Static analysis and headless Ghidra batch-disassembly only, against two real firmware images
+(one already used by every prior round, one newly added this round) and this fork's own SLEIGH
+module. No synthetic compilation was needed — every fix had enough independent real-firmware
+confirmation on its own. No new tool installation beyond what was already documented for
+generating ground-truth disassembly in prior rounds; no device I/O, no MIDI/USB/OTA touched at
+any point.

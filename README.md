@@ -34,7 +34,8 @@ addresses at once instead of chasing one-off mismatches.
 | + third round's multi-register range-list/special-register-list push/pop family | 309 | 99.83% |
 | + fourth round's wide-immediate signed compare-and-branch fix | 277 | 99.87% |
 | + fifth round's register-operand shift/divide and `if`/`ifs` sibling fixes | 179 | 99.91% |
-| + sixth round's single-register bitmap push/pop, `packedimm12` 7th mode, and misc fixes | 68 | **99.97%** |
+| + sixth round's single-register bitmap push/pop, `packedimm12` 7th mode, and misc fixes | 68 | 99.97% |
+| + seventh round's fixes, cross-validated against a second real firmware image | 58 | **99.972%** |
 
 Across all four rounds, previously-undecoded `pi32v2` encoding families were identified and
 added, each verified against every real occurrence in the ground truth (not a sample) and,
@@ -100,6 +101,16 @@ an instruction family this module had already mostly implemented:
   verification pipeline itself (a wrong raw-binary load base address that silently produced a
   0%-match false alarm) — worth knowing before trusting a from-scratch run of this pipeline
   that claims everything is broken.
+- **A seventh round validated against a second, independently-sourced real firmware image from
+  the same chip family** (same container/load-address format, different application code),
+  disassembled with the same real vendor toolchain used for the original ground truth. This
+  turned several previously single-occurrence, "not enough evidence" gaps into 3-14x confirmed
+  patterns, closing 10 addresses on the original firmware (58 remaining) and 39 on the new one
+  (116 → 77), across a doubleword pre-increment immediate store, a post-increment register-
+  stride byte store, two fixed-offset post-increment stores resolving formulas flagged as
+  unsolved in earlier rounds, a missing `rtss` return opcode, and three `if`/`ifs` block-form
+  immediate-comparison siblings (one new signed direct-immediate form, two confirmed duplicate-
+  opcode slots of already-implemented comparisons). Zero regressions on either firmware image.
 
 Full derivation, confidence levels, and the remaining (lower-impact, harder) open gaps are
 documented in [`tools/gap-analysis/PI32V2_SLEIGH_GAPS.md`](tools/gap-analysis/PI32V2_SLEIGH_GAPS.md).
@@ -127,7 +138,7 @@ paths, so it works against any target firmware, not just the one this fork was b
 - dv10 *(this is Blackfin, not implemented)*
 - dv12 *(this is Blackfin, not implemented)*
 - pi32 *(not complete, but somewhat usable — untouched by this fork)*
-- **pi32v2** *(99.97% instruction-match rate against real firmware ground truth — see above;
+- **pi32v2** *(99.972% instruction-match rate against real firmware ground truth — see above;
   a handful of lower-impact encoding families still open, see the gap-analysis doc)*
 - q32s *(very early stage — untouched by this fork)*
 - f59 *(not implemented yet)*
@@ -142,11 +153,13 @@ paths, so it works against any target firmware, not just the one this fork was b
   - Maybe refactor the mnemonics? (like the ones used on q32s and pi32v2? or do it the other way around?)
   - Change flags on instructions that change them (e.g. add, sub, rotc, etc.)
 - pi32v2
-  - Remaining missing instructions (one narrow dual-register multiply-accumulate-subtract
-    sub-case of the `(ssat,x2)` saturation modifier, several single-occurrence dual-fetch
-    parallel multiply-accumulate and saturating-arithmetic forms, a `[rX+off] += imm`
-    compound-assign-with-immediate-delta family whose offset/delta packing isn't fully solved,
-    and a few other single-occurrence opcodes — see the gap-analysis doc)
+  - Remaining missing instructions (a dual-register/half-register `(ssat,x2)` parallel-
+    arithmetic family now with a partial bit-level hypothesis but at least one unresolved
+    selector bit, a wide-immediate memory-operand AND family, a separate `group=7`-based
+    special-register push/pop mechanism distinct from the existing range-list family, several
+    single-occurrence dual-fetch parallel multiply-accumulate and saturating-arithmetic forms, a
+    `[rX+off] += imm` compound-assign-with-immediate-delta family whose offset/delta packing
+    isn't fully solved, and a few other single-occurrence opcodes — see the gap-analysis doc)
   - The wide-immediate `if (rX ?? imm)` conditional-branch family (12 addresses) — deferred
     across several rounds since fixing it means extending the if/then/else state machine and
     disambiguating against the existing 32-bit `or`-immediate constructor, with real risk of

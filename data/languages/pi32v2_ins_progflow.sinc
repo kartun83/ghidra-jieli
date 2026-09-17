@@ -43,18 +43,25 @@
 }
 
 #
-# rtns
+# rtss / rtns
 #
-# Sibling of rts/rti/rtx/rte above (ins0012=0x0080-0x0083); ins0012=0x0084 is
-# unused and 0x0085 is this "return non-secure" opcode, confirmed against
-# every real ground-truth occurrence (bare mnemonic, no operand, exactly like
-# its siblings). This module has no TrustZone-style secure/non-secure state
-# modeled and there is no second link register anywhere in this ISA's
-# register file, so the only real-firmware-supportable p-code is the same
-# "return via rets" used by plain rts -- correct for decompiler control-flow
-# purposes (a real return) even though the true security-domain transition
-# semantics aren't modeled.
+# Siblings of rts/rti/rtx/rte above (ins0012=0x0080-0x0083). ins0012=0x0084
+# ("rtss", confirmed against 3 real ground-truth occurrences in the FM-1
+# firmware, bare mnemonic no operand) and 0x0085 ("rtns", "return
+# non-secure") are the same TrustZone-style secure/non-secure return pair --
+# "rtss" is "return from secure to secure" (or similarly named counterpart),
+# same opcode-run position/pattern as rtns. This module has no TrustZone-
+# style secure/non-secure state modeled and there is no second link register
+# anywhere in this ISA's register file, so the only real-firmware-supportable
+# p-code is the same "return via rets" used by plain rts -- correct for
+# decompiler control-flow purposes (a real return) even though the true
+# security-domain transition semantics aren't modeled.
 #
+:rtss is group=0 & ins0012=0x0084
+{
+	return [rets];
+}
+
 :rtns is group=0 & ins0012=0x0085
 {
 	return [rets];

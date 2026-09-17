@@ -153,14 +153,32 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
 # load-vs-store discriminator convention as addldw/addsdw.
 #
 # Confirmed against 3 real occurrences (all load direction, amount register
-# r2, base register r0, only the destination pair varies); a store sibling
-# at imm1617=3 is a plausible analogy (mirroring addsdw) but was not
-# observed in real firmware and is deliberately NOT added here.
+# r2, base register r0, only the destination pair varies); the register-
+# stride store sibling at imm1617=3 (ins0003=0xC) is still not observed and
+# deliberately not added -- but its IMMEDIATE-offset counterpart (imm11,
+# same ins0303=0/imm0002s condition as ldw/sdw/addldw's imm11 forms above,
+# just in the 0xC5 family instead of 0xCD) *is* now confirmed below.
 #
 :addldw edregA, eregB, eregC is group=7 & ins0411=0xC5 & ins0003=0xC ; edregA & eregB & eregC & imm1617=2
 {
     eregB = eregB + eregC;
     edregA = *:8 eregB;
+}
+
+#
+# r{n+1}_r{n} = [++rB=#imm11] = <store>  -- paired-register (doubleword)
+# sibling of addsdw's imm11 form (below, ins0411=0xCD), living in the same
+# 0xC5 family as ldw/sdw/addldw's edregA forms above, at imm1617=3 (the one
+# remaining slot in that family's 0/1/2/3 = ldw/sdw/addldw-reg/addsdw-imm
+# discriminator). Confirmed against 3 real ground-truth occurrences (two
+# distinct imm11 values, 696 and 872, and both edregA pairs r1_r0/r3_r2 seen
+# at the 696 value) -- same imm11 bit-packing formula as addsdw's imm11 form.
+#
+:addsdw edregA, eregB, #imm11 is group=7 & ins0411=0xC5 & imm0002s & ins0303=0 ; edregA & eregB & imm2427 & imm1819 & imm1617=3
+[imm11 = (imm0002s << 8) | (imm2427 << 4) | (imm1819 << 2);]
+{
+    eregB = eregB + imm11;
+    *:8 eregB = edregA;
 }
 
 # Load double word into register
@@ -250,17 +268,26 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
 #
 # Distinct opcode slot (0xcdf) from the general imm8 form above, evidenced
 # only with a fixed -16 offset across all 8 real ground-truth occurrences
-# (imm2427 pinned at 0xF and imm1719 at 0 in every one) -- a real firmware
-# store sibling exists at the same ins0011 with a *different*, not yet
-# understood offset formula (imm1719=4 there instead of 0, with offsets seen
-# at -8; see PI32V2_SLEIGH_GAPS.md), so imm1719=0 is pinned here deliberately
-# rather than left free, to avoid this load constructor over-matching into
-# that still-unresolved store form's encoding space.
+# (imm2427 pinned at 0xF and imm1719 at 0 in every one).
 #
 :lw eregA, [eregB++="-16"] is group=7 & ins0011=0xcdf ; eregA & eregB & imm2427=15 & imm1719=0
 {
     eregA = *:4 eregB;
     eregB = eregB - 16;
+}
+
+#
+# [rB++=-8] = rA  (fixed-offset post-increment store, sibling of the -16
+# load above at the same escape opcode 0xcdf, discriminated by imm1616=1
+# same as the general imm8 store form's direction convention). Confirmed
+# against real ground-truth (FM-1 firmware): imm2427=15, imm1719=4 -- this
+# is exactly the "different, not yet understood offset formula" flagged
+# when the -16 load was added; now resolved with real evidence.
+#
+:sw eregA, [eregB++="-8"] is group=7 & ins0011=0xcdf ; eregA & eregB & imm2427=15 & imm1719=4 & imm1616=1
+{
+    *:4 eregB = eregA;
+    eregB = eregB - 8;
 }
 
 ###########################################################################################
@@ -519,6 +546,30 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
 {
     *:2 eregB = eregA:2;
     eregB = eregB + eregC;
+}
+
+#
+# h[rB++=-4] = rA / h[rB++=-260] = rA -- fixed-offset post-increment store
+# escapes, siblings of the word family's [rB++=-16]/[rB++=-8] fixed escapes
+# above at ins0011=0xcdf. Each confirmed against exactly one real ground-
+# truth occurrence (FM-1 firmware); both share imm1719=6/imm2427=15/
+# imm1616=1 (store direction) but differ in the base opcode's own low bit
+# (0xdd3 vs 0xdd2) together with the offset magnitude and base register --
+# with only one sample per opcode there isn't enough evidence yet to tell
+# whether that low bit or the base register is what drives the -4-vs-260
+# difference, so each is pinned as its own fully-specific escape rather
+# than merged into one parameterized formula (see PI32V2_SLEIGH_GAPS.md).
+#
+:sh eregA, [eregB++="-4"] is group=7 & ins0011=0xdd3 ; eregA & eregB & imm2427=15 & imm1719=6 & imm1616=1
+{
+    *:2 eregB = eregA:2;
+    eregB = eregB - 4;
+}
+
+:sh eregA, [eregB++="-260"] is group=7 & ins0011=0xdd2 ; eregA & eregB & imm2427=15 & imm1719=6 & imm1616=1
+{
+    *:2 eregB = eregA:2;
+    eregB = eregB - 260;
 }
 
 ###########################################################################################
@@ -1065,6 +1116,20 @@ ReadRegs: ReadRegsMap is ReadRegsMap [bitset=0; counter=0; sep=0;] {}
 {
     eregB = eregB + eregA;
     *:1 eregB = eregC:1;
+}
+
+#
+# b[rB++=rC] = rA -- post-increment register-stride store, sibling of the
+# pre-increment form above (0xedc) at the neighboring opcode 0xede (same
+# family shape as the halfword post-increment register-stride store
+# lh.z/sh at ins0011=0xdde: store-then-increment vs the byte family's
+# increment-then-store at 0xedc). Confirmed against 7 real occurrences
+# (bases r3/r7, strides r4/r7, values r0/r2, always imm1619=1).
+#
+:sb eregA, [eregB++=eregC] is group=7 & ins0011=0xede ; eregA & eregB & eregC & imm1619=1
+{
+    *:1 eregB = eregA:1;
+    eregB = eregB + eregC;
 }
 
 #
