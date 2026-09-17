@@ -360,6 +360,25 @@ poppcregs: {pc,popreglist4} is popreglist4 & pc & ins0003
 }
 
 #
+# [sp+imm6ext] = rA, extended-offset form (offset 128-252, step 4)
+# => sw rA, [sp+imm6ext]
+#
+# Sibling of the 5-bit "sw regA, [sp+imm5]" constructor above, but for
+# offsets that no longer fit in 5 bits: ins0407 gains bit1 (0x8|0x2=0xA) and
+# bit 13 of the raw word is a fixed 1 which, semantically, is bit 5 of the
+# byte-offset-divided-by-4 immediate (i.e. imm0812 covers the low 5 bits,
+# and the encoding always implies the top bit of a 6-bit immediate is set).
+# Confirmed against research/disasm/app_full_disasm_llvm.txt ground truth:
+# every real occurrence has offset in [128,252] step 4 and bit13=1.
+#
+:sw regA, [sp+imm6ext] is group=1 & ins0407=0xA & regA & imm0812 & sp
+[ imm6ext = (imm0812 + 32) * 4; ]
+{
+    addr:4 = sp + imm6ext;
+    *:4 addr = regA;
+}
+
+#
 # [sp+imm8] = rA
 # => sw rA, [sp+imm8]
 #
@@ -378,6 +397,21 @@ poppcregs: {pc,popreglist4} is popreglist4 & pc & ins0003
 [ imm5 = imm0812 * 4; ]
 {
     addr:4 = sp + imm5;
+    regA = *:4 addr;
+}
+
+#
+# rA = [sp+imm6ext], extended-offset form (offset 128-252, step 4)
+# => lw rA, [sp+imm6ext]
+#
+# Load-side sibling of "sw regA, [sp+imm6ext]" above -- see that comment for
+# the encoding rationale. ins0407 = 0x2 (base load ins0407=0 | extended-flag
+# 0x2), same imm6ext = (imm0812 + 32) * 4.
+#
+:lw regA, [sp+imm6ext] is group=1 & ins0407=0x2 & regA & imm0812 & sp
+[ imm6ext = (imm0812 + 32) * 4; ]
+{
+    addr:4 = sp + imm6ext;
     regA = *:4 addr;
 }
 
