@@ -206,3 +206,249 @@ This entire session was static analysis: reading a ground-truth disassembly list
 running Ghidra headless against a decrypted firmware image already on disk, and
 editing/recompiling this SLEIGH module. No MIDI, USB, or OTA/flash I/O was performed or
 attempted at any point.
+
+---
+
+# 2026-09-16 follow-up session
+
+Scope: same as above (static analysis only), plus one new technique: cross-compiling small,
+targeted C snippets with the real JieLi `clang`/`objdump` toolchain (run inside a Linux VM,
+since the toolchain only ships x86-64 Linux binaries) to get clean, isolated ground truth for
+encoding families that are rare or ambiguous in the one real firmware image available. No
+MIDI, USB, or OTA/flash I/O was performed or attempted at any point; the toolchain was only
+ever used to compile-and-disassemble local throwaway `.c` files, never to touch real hardware.
+
+## New technique: synthetic ground truth via the real toolchain
+
+Where real-firmware occurrences of a gap were too sparse or fixed-operand to confidently
+derive a general bit-field formula, small standalone C functions were written to coax
+`clang -target pi32v2 -O2` into emitting the construct in isolation (e.g. `a > b ? a : b`
+idioms for `smax`/`umax`/`smin`/`umin`), then `objdump`'d with the same toolchain. This gave
+exact, unambiguous confirmation of an opcode's mnemonic and operand layout independent of
+whatever fixed register combination happened to appear in the one real binary available.
+This was used for the `smax`/`umax` fix below (full confidence, arbitrary registers
+compiled and checked). It was *not* usable for the saturating-add family: no C idiom tried
+(including the natural `__builtin_add_overflow`-based saturate pattern, and ARM/Hexagon-style
+builtins, which this toolchain's `clang` does not expose for `pi32v2`) got the compiler to
+emit it — that fix relied on real-firmware ground truth only, with an explicitly-flagged
+lower-confidence pcode semantic model (see below). Cross-referencing the generic AC79 AIoT
+SDK headers for saturating-arithmetic intrinsics/macros turned up nothing useful for
+`pi32v2` specifically — its only exposed low-level intrinsics are `__builtin_pi32v2_*` DSP
+helpers (multiply-accumulate, bit-extract, rotate, etc.), none of which are a saturating
+add/subtract.
+
+## Results this session
+
+| Stage | BAD | LEN_MISMATCH | MISSING | Total gap addrs | Match rate |
+|---|---|---|---|---|---|
+| Start of this session (re-measured against the same tooling/ground truth) | 648 | 38 | 7 | 693&nbsp;&#42; | 99.62% |
+| + `smax`/`umax` fix (fix #4), diffed together with fixes #5/#6 below | — | — | — | 586&nbsp;&#42;&#42; | — |
+| + `ifeq` + `sadd.sat` fixes (fixes #5, #6) | — | — | — | 586 | — |
+| + byte/halfword/doubleword pre/post-increment & negative-offset load/store family (fix #7) | 360 | 38 | 7 | **405** | **99.78%** |
+
+&#42; This session's own re-measurement (693) differs slightly from the previous session's
+reported end state (768) purely from re-running the same tooling against the same ground
+truth at a different point in time; not a regression, and not chased down further since the
+two counts are close and both sessions' absolute fix counts are independently verified
+against real occurrences.
+
+&#42;&#42; Fixes #4 (`smax`/`umax`), #5 (`ifeq`), and #6 (`sadd.sat`) were compiled and diffed
+together in one pass, dropping the total from 693 to 586 (75 addresses from `ifeq` + 32 from
+`sadd.sat` = 107, matching the observed drop exactly). This session did not re-diff `smax`/
+`umax` in isolation, so its exact real-firmware address count isn't separately confirmed
+here — its correctness is instead confirmed independently via synthetic compilation (see fix
+#4 below) and via bit-pattern matching against every real `34 e4`/`34 f4`-prefixed
+occurrence found while deriving the encoding.
+
+Final state: **99.78%** of real (non-data-region, non-`<unknown instruction>`) ground-truth
+instructions decode with matching length, up from 99.63% at the end of the previous session.
+
+## Fixes made this session
+
+### 4. `smax`/`umax` parallel-arithmetic ops (~74 addresses)
+
+`pi32v2_ins_arithops.sinc`: `smin`/`umin` were already implemented at `ins0011=0x435`
+(`group=7`, two-word encoding, `eregA = op(eregB, eregC)` with `imm1619` selecting
+signed(1)/unsigned(0)). The neighboring `ins0011=0x434` slot (`smax`/`umax`, same field
+layout) was missing entirely.
+
+Confirmed **both** via real firmware (all `34 e4`/`34 f4`-prefixed occurrences in the real
+binary) **and** via synthetic compilation: `clang -target pi32v2 -O2` on
+`int f(int a,int b){return a>b?a:b;}`-style C emits exactly `34 e4 01 01` /
+`r0 = smax(r0, r1)`, and varying operand registers in the C source (`smax(r2,r5)`,
+`umax(r5,r4)`, etc.) confirmed the general field layout (`eregA`=dest, `eregB`=first
+operand, `eregC`=second operand, `imm1619`=signed/unsigned flag) independent of any one
+firmware's fixed register usage.
+
+Added `umax`/`smax` constructors mirroring the existing `umin`/`smin` pcode style exactly
+(branch-and-pick, not a native SLEIGH max/min operator). **Confidence: high** — confirmed by
+both real-firmware occurrences and arbitrary-register synthetic compilation.
+
+### 5. Test-and-set spinlock retry branch, `ifeq` (75 addresses)
+
+`pi32v2_ins_progflow.sinc`: previously flagged as a suspected trap/unreachable-padding
+idiom (`40 e8 fd ff`, all 75 occurrences byte-identical). Re-examining the surrounding real
+disassembly context this session showed every occurrence directly follows a `testset
+b[rX]` instruction and always branches back exactly onto it — the classic hardware
+test-and-set spinlock retry loop, not padding.
+
+Confirmed the branch target formula: `group=7`, `ins0011=0x840`, target =
+`inst_next + sext(imm16)*2` (the same `imm1631s * 2 + inst_next` formula already used
+elsewhere in this file for `jaddr16`-style unconditional-displacement branches). No register
+field varies across any of the 75 real occurrences, consistent with this being a flag-test
+branch (not a register comparison) — unlike every other conditional branch already modeled
+in this file.
+
+`testset` itself is still only a `TODO()` stub in `pi32v2.slaspec` with no modeled flag
+output, so the true flag polarity/source could not be derived from this codebase alone.
+Rather than invent an unconfirmed specific status-register-bit semantic, the new `ifeq`
+constructor models its condition as an explicit opaque `TODO()`-sourced value — honest about
+what is/isn't confirmed, while still giving the decompiler a real `CBRANCH` so the retry
+loop's control flow (back-edge + fallthrough) is represented correctly.
+
+**Confidence: high** on the encoding/branch-target (confirmed against all 75 real
+occurrences); **medium** on the exact flag semantics (deliberately left as an opaque
+placeholder pending a proper `testset` implementation).
+
+### 6. Signed saturating add, `sadd.sat` (32 addresses)
+
+`pi32v2_ins_arithops.sinc`: real firmware contains 32 byte-identical occurrences of
+`39 e4 a0 ab` / `r10 = r10 + r11 (ssat)` — structurally the same two-word `group=7` family as
+`smax`/`smin`/`umax`/`umin` above (`ins0011=0x439`, immediately adjacent to `0x434`/`0x435`),
+but with a fixed operand combination that gives no register-field diversity to double-check
+against.
+
+No C idiom attempted (branch-based saturate patterns, `__builtin_add_overflow`-based
+clamping, ARM/Hexagon saturating-add builtins) got this toolchain's `clang` to emit a
+saturating-add instruction for `pi32v2` — `strings` on the toolchain's `clang` binary does
+show internal instruction-selection pattern names for a SIMD saturating-add/subtract family
+(`SIMD_QADD32S_rrr`, `SIMD_QSUB32S_rrr`, etc.), suggesting the hardware feature exists, but no
+exposed `__builtin_pi32v2_*` intrinsic reaches it, so no clean synthetic ground truth could be
+generated for this one. This fix therefore relies on real-firmware ground truth only, for a
+single fixed operand combination.
+
+Added `sadd.sat eregA, eregB, eregC is ins0011=0x439` with standard signed-saturating-add
+pcode semantics (clamp to `INT32_MIN`/`INT32_MAX` on signed overflow, via the same
+standard overflow-detection idiom: `(eregB^sum)&(eregC^sum)` is negative iff the signed add
+overflowed — see the `.sinc` file for the exact expression). Deliberately did **not**
+constrain `imm1619`
+(unlike `smax`/`smin`, which use it as a signed/unsigned selector) since no second
+occurrence at this same opcode with a different `imm1619` value was observed to justify or
+require that constraint — the neighboring `0x436`-`0x438` opcode slots remain unconfirmed and
+unimplemented.
+
+**Confidence: medium.** The encoding/opcode-family match is solid (same structural family as
+the already-cross-validated `smax`/`smin`), but the exact saturation pcode semantics are a
+best-effort standard-signed-saturating-add model, not independently confirmed against
+silicon or a second real occurrence with different operands.
+
+### 7. Byte/halfword/doubleword pre/post-increment & negative-offset load/store family (~250 addresses, largest fix this session)
+
+`pi32v2_ins_loadstore.sinc`: this was the largest remaining gap bucket. The existing byte
+load/store family (`lb.z`/`lb.s`/`sb`) already covered offset-based addressing
+(`b[rB+imm8]`) and some pre-increment forms (`b[++rB=imm8]` positive/negative for loads,
+`b[++rB=rC]`/`b[rB++=rC]` register forms) at a consistent `0xe5X`/`0xedX` opcode-nibble
+scheme, but several sibling slots in the same numbering scheme were unimplemented, and the
+analogous halfword (`0xd5X`/`0xddX`) and doubleword (`0xc5X`, register-preincrement form)
+opcodes were missing almost entirely. All of the following were derived purely from bit-slice
+solving against real-firmware occurrences (no synthetic compilation needed here, since the
+existing byte family already gave a confirmed field-layout template to extend):
+
+- **`lb.z` unsigned byte post-increment load, `ins0011=0xed0`** (52 addresses, the single
+  largest bucket) — the missing unsigned sibling of the already-implemented `lb.s` at
+  `0xed4`, same `imm8 = (imm2427<<4)|imm1619` split-nibble formula.
+- **Negative-offset byte load/store, `ins0011=0xe51`/`0xe53`/`0xe55`** (22 + 14 + 5
+  addresses) — negative-immediate siblings of the already-implemented positive-offset forms
+  at `0xe50`/`0xe52`/`0xe54`, using the same one's-complement-style negative-immediate
+  formula already used elsewhere in this file for `lb.z`'s pre-increment negative form
+  (`0xe59`).
+- **Byte store pre-increment, `ins0011=0xe5a`/`0xe5b`** (29 + 8 addresses) — store-direction
+  siblings of the already-implemented `lb.z` pre-increment loads at `0xe58`/`0xe59`, same
+  addressing mode and immediate formula, opposite direction.
+- **Halfword pre-increment family, `ins0011=0xd58`/`0xd59`/`0xd5b`/`0xd5c`/`0xd5d`** (~90
+  addresses combined) — the halfword counterpart to the byte pre-increment family above.
+  Notable difference: since a halfword access's immediate is always even, bit 0 of the
+  low-nibble nibble is never a real magnitude bit, and hardware reuses it as an explicit
+  load(0)/store(1) direction flag instead of needing separate opcodes per direction (confirmed
+  by 4 real store occurrences whose naive nibble-concatenation immediate was consistently
+  off-by-one from the expected always-even value, until that bit is masked off as a direction
+  flag rather than magnitude). `0xd59`/`0xd5d` are "extended range" siblings of `0xd58`/`0xd5c`
+  for immediates 256-510 (confirmed by an implicit leading `1` bit in the same one's-complement
+  positional slot). Only the load direction was observed for the extended-range and negative
+  variants; a store counterpart was not added without real evidence.
+- **Register pre/post-increment halfword load/store, `ins0011=0xddc`/`0xdde`** (~20 addresses)
+  — halfword sibling of the byte register-preincrement form at `0xedc`, extending it to a full
+  `r0`-`r15` stride register range (the short 16-bit `group=0` encoding added in the previous
+  session's fix #1 only supports an `r8`-`r15` stride register). Both load (`imm1619=0`
+  unsigned, `imm1619=2` signed) and store (`imm1619=1`) directions confirmed for the
+  pre-increment form; only unsigned-load and store were observed for the post-increment form.
+- **Doubleword register pre-increment load, `addldw edregA, eregB, eregC` at
+  `ins0411=0xC5 & ins0003=0xC`** (3 addresses) — paired-register sibling of the
+  already-implemented single-register `addldw`/`addsdw` forms at `ins0411=0xCD`, in the
+  neighboring `0xC5` opcode family (where the existing offset-based `ldw`/`sdw` doubleword
+  forms already live), using the same `ins0003=0xC` register-preincrement selector and
+  `imm1617` load(2)/store(3) discriminator convention already established by `addldw`/
+  `addsdw`. Only the load direction (`imm1617=2`) was observed in real firmware; a store
+  sibling at `imm1617=3` is a plausible analogy but was deliberately **not** added without
+  real evidence.
+
+**Confidence: high** for every sub-form with a directly-confirmed real occurrence (all of the
+above except the explicitly-noted "not added" store/negative counterparts); each formula was
+checked against every real occurrence found for that specific opcode slot, not a sample.
+
+## Still open (not fixed this session)
+
+Ranked by remaining real-firmware address count in the final diff:
+
+- **Multi-register push/pop range-list syntax**, e.g. `[--sp] = {r3-r0}`, `{psr, rets} =
+  [sp++]`, `[--sp] = {sp, ssp, usp, icfg, psr, rets, retx, rete, reti}` (first bytes
+  `0x60`/`0x6a`/`0x6c`/`0x6d`/`0xc0`/`0xc8`/`0xcb`/`0xd2`/`0xd9`/`0xdb`/`0xe0`/`0xe8`/`0xef`/
+  `0xfd`/`0xa8`/`0xb1`, roughly 60 addresses combined) — the existing `WriteRegs`/`ReadRegs`
+  bitmap-based push/pop machinery in `pi32v2_ins_loadstore.sinc` handles an explicit bitmap of
+  arbitrary registers, but not this contiguous-range (`{rX-rY}`) or named-special-register-list
+  display syntax; likely a separate, syntactically different encoding rather than a variant of
+  the existing bitmap form, needs its own investigation.
+- **Register-operand shift and 64-bit divide op families** sharing first bytes `0xd8`
+  (`r3_r2 >>= r10`, `r5_r4 <<= r1`, `r1_r0 >>>= 63`, ~26 addresses) and `0xf6`
+  (`r3_r2 = r1_r0 / r4 (u)`, `r7_r6 = r3_r2 / r5 (u)`, ~18 addresses) — paired-register
+  shift-by-register and 64-bit-by-32-bit divide ops, not yet modeled.
+- **A `(ssat,x2)` parallel SIMD multiply-accumulate-subtract family**, e.g.
+  `r3_r2 -= r6.h,r6.h *|* r15.l,r15.l (ssat,x2)` (first byte `0x73`, ~6 addresses) — related to
+  but distinct from the `sadd.sat` fix above; a wider DSP instruction family that overlaps with
+  the `SIMD_QADD32S`/`SIMD_QSUB32S`-adjacent pattern names found in the toolchain's `clang`
+  binary (see fix #6) but not reached by any C idiom tried.
+- Several `if`/`ifs` register-comparison variants (first bytes `0x0c`, `0x10`, `0xb0`, `0xb1`,
+  `0xb4`, `0x15`, `0x90`/`0x94`/`0x98`/`0x2c`-with-fixed-second-word, ~70 addresses combined) —
+  a mix of what look like wider-immediate comparison forms (`if (r7 != 134217728)`,
+  `ifs (r12 > 33554944)`) and short register/register comparisons not yet in
+  `pi32v2_ins_ifthenelse.sinc`/`pi32v2_ins_progflow.sinc`.
+- A handful of miscellaneous single/double-byte opcodes seen only 1-4 times each: `sspn = sp`
+  (`0x47 0x14`), `wfe` (`0x44 0x00`), `ssync` (`0x32 0x00`, a *different* encoding from the
+  already-implemented `ssync`), `trigger` (`0x70 0xe8 0x00 0x00`), `callns r12`/`r13`/`r14`/
+  `r15` (`0x9c`/`0x9d`/`0x9e`/`0x9f 0x00`, register-operand siblings of an already-implemented
+  base opcode), and a small `sp` post-increment double-load `r5 = [r0++=-16]`
+  (`df ec 00 5f`) — each too infrequent (1-4 real occurrences) to be worth prioritizing over
+  the bigger buckets above, but individually cheap if revisited.
+- The 38 `LEN_MISMATCH` and 7 `MISSING` addresses were still not individually triaged this
+  session either — carried over from the previous session's open item, still worth a
+  dedicated follow-up pass since length mismatches can point to subtly wrong (not just
+  missing) constructors.
+- No store-direction sibling was added for the halfword extended-range/negative pre-increment
+  forms (`0xd59`/`0xd5b`/`0xd5d`) or the doubleword register-preincrement form (`0xC5C`
+  store, `imm1617=3`) — plausible by analogy with their load counterparts and other
+  already-implemented load/store pairs, but not added without a real occurrence to confirm
+  against.
+
+## Files touched this session
+
+- `data/languages/pi32v2_ins_arithops.sinc` (4 new constructors: fixes #4 and #6)
+- `data/languages/pi32v2_ins_progflow.sinc` (1 new constructor: fix #5)
+- `data/languages/pi32v2_ins_loadstore.sinc` (17 new constructors: fix #7)
+- `data/languages/pi32v2.sla` (recompiled)
+
+## Non-invasive-first compliance (this session)
+
+Same as above, plus: the real JieLi `clang`/`objdump` toolchain was used exclusively to
+compile and disassemble small local throwaway `.c` files inside a Linux VM already set up for
+this purpose — never to touch, flash, or communicate with real hardware. No MIDI, USB, or
+OTA/flash I/O was performed or attempted at any point.

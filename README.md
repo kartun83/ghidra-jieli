@@ -29,10 +29,14 @@ addresses at once instead of chasing one-off mismatches.
 |---|---|---|
 | Naive per-address test harness (harness bug, not a real baseline) | 8,966 | 95.7% |
 | Same SLEIGH module, correct batched/linear-sweep harness | 1,358 | 99.35% |
-| + this fork's 3 targeted encoding fixes | 768 | **99.63%** |
+| + first session's 3 targeted encoding fixes | 768 | 99.63% |
+| + second session's saturating-arithmetic/branch/load-store fixes | 405 | **99.78%** |
 
-Three previously-undecoded `pi32v2` encoding families were identified and added, each verified
-against every real occurrence in the ground truth (not a sample):
+Across both sessions, previously-undecoded `pi32v2` encoding families were identified and
+added, each verified against every real occurrence in the ground truth (not a sample) and,
+where real occurrences were too sparse to pin an encoding confidently, cross-checked against
+clean output from the real JieLi `clang`/`objdump` toolchain compiling small targeted C
+snippets:
 
 - **Register-indexed post-increment load/store** (`[rB ++= rC]`, word/halfword/byte) — the
   single largest gap, ~3,000+ addresses, a very common addressing mode in compiler-generated
@@ -41,6 +45,17 @@ against every real occurrence in the ground truth (not a sample):
   any function with a stack frame larger than 124 bytes.
 - **Signed halfword `sp`-relative load (`lh.s`)** — ~136 addresses, the one missing slot in an
   otherwise-complete `sp`-relative family.
+- **`smax`/`umax` parallel-arithmetic ops** — confirmed by compiling a saturating-max/min C
+  idiom with the real toolchain; `smin`/`umin` were already present, `smax`/`umax` were the
+  missing sibling opcode.
+- **A test-and-set spinlock retry branch (`ifeq`)** — previously suspected to be a trap/padding
+  idiom; real-firmware context (always immediately following a `testset` instruction, always
+  looping back exactly onto it) showed it's a genuine conditional branch, not padding.
+- **A large family of byte/halfword pre/post-increment and negative-offset load/store
+  addressing modes** (`b[rB++=imm]`, `b[++rB=imm]`, `h[++rB=imm]`, `h[++rB=rC]`, register-pair
+  `d[++rB=rC]`, and their negative-immediate/store-direction siblings) — the biggest single
+  bucket of remaining gaps, resolved by extending the existing byte-family encoding pattern to
+  its unimplemented sibling opcodes and to the analogous halfword/doubleword opcodes.
 
 Full derivation, confidence levels, and the remaining (lower-impact, harder) open gaps are
 documented in [`tools/gap-analysis/PI32V2_SLEIGH_GAPS.md`](tools/gap-analysis/PI32V2_SLEIGH_GAPS.md).
@@ -68,7 +83,7 @@ paths, so it works against any target firmware, not just the one this fork was b
 - dv10 *(this is Blackfin, not implemented)*
 - dv12 *(this is Blackfin, not implemented)*
 - pi32 *(not complete, but somewhat usable — untouched by this fork)*
-- **pi32v2** *(99.63% instruction-match rate against real firmware ground truth — see above;
+- **pi32v2** *(99.78% instruction-match rate against real firmware ground truth — see above;
   a handful of lower-impact encoding families still open, see the gap-analysis doc)*
 - q32s *(very early stage — untouched by this fork)*
 - f59 *(not implemented yet)*
@@ -83,8 +98,10 @@ paths, so it works against any target firmware, not just the one this fork was b
   - Maybe refactor the mnemonics? (like the ones used on q32s and pi32v2? or do it the other way around?)
   - Change flags on instructions that change them (e.g. add, sub, rotc, etc.)
 - pi32v2
-  - Remaining missing instructions (`ifeq`/self-loop trap idiom, `smax`/`umax`/`ssat` parallel-arith
-    family, a narrower `[rB++=imm]` variant, some push/pop-list variants — see the gap-analysis doc)
+  - Remaining missing instructions (multi-register push/pop range-list syntax `[--sp]={rX-rY}`,
+    register-operand shift/divide ops sharing a `0xd8`/`0xf6` first byte, several `ifs`/`if`
+    comparison variants, a `(ssat,x2)` SIMD multiply-accumulate family, `sspn`/`wfe`/`callns`
+    and a few other single/double-byte opcodes — see the gap-analysis doc)
   - Mnemonics like in q32s or pi32?
 - q32s
   - Do the rest:
