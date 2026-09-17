@@ -120,6 +120,19 @@ an instruction family this module had already mostly implemented:
   `if` comparison opcode, and one more duplicate-opcode slot in the `if`/`packedimm12` family.
   A fourth candidate firmware image was found to use a different, unsupported container
   sub-format and was left for a future round. Zero regressions on any of the three images.
+- **A ninth round switched from firmware archaeology to synthetic ground truth**, compiling
+  real probes with the vendor's own pi32v2 `clang` and cross-checking the output against this
+  grammar. This produced solid negative evidence that ordinary compiled C never emits a direct
+  wide-immediate compare-and-branch opcode (it always materializes the constant into a register
+  first), and independent confirmation that the single-special-register interrupt push/pop
+  (`[--sp] = {reti}` / `{reti} = [sp++]`) already decodes correctly. Five more real firmware
+  images were also checked: two from the same chip family surfaced a new, unresolved class of
+  apparent gap that isolated testing traced to a context/state issue during long linear sweeps
+  rather than a missing opcode, and two images from a different, related chip showed a gap rate
+  50-100x the established baseline across unrelated instruction families — evidence of a
+  meaningfully different encoding revision, not a few missing constructors, so neither was used
+  as a fix source. No grammar changes this round; a ground-truth tooling bug (address-column
+  parsing for a wider memory map) was found and fixed instead.
 
 Full derivation, confidence levels, and the remaining (lower-impact, harder) open gaps are
 documented in [`tools/gap-analysis/PI32V2_SLEIGH_GAPS.md`](tools/gap-analysis/PI32V2_SLEIGH_GAPS.md).

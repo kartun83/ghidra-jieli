@@ -35,11 +35,11 @@ import re
 import sys
 from collections import Counter, defaultdict
 
-GT_LINE_RE = re.compile(r'^ ([0-9a-f]+):\s+((?:[0-9a-f]{2} )+)\s*\t(\t*)(.*)$')
+GT_LINE_RE = re.compile(r'^ ?([0-9a-f]+):\s+((?:[0-9a-f]{2} )+)\s*\t(\t*)(.*)$')
 # "<unknown instruction>" lines have NO leading tab before the text (unlike
 # every other objdump line, which separates bytes from mnemonic with a tab) --
 # they need a separate pattern.
-GT_UNKNOWN_RE = re.compile(r'^ ([0-9a-f]+):\s+((?:[0-9a-f]{2} )+)\s*<unknown instruction>\s*$')
+GT_UNKNOWN_RE = re.compile(r'^ ?([0-9a-f]+):\s+((?:[0-9a-f]{2} )+)\s*<unknown instruction>\s*$')
 GHIDRA_LINE_RE = re.compile(r'^([0-9a-f]{8})\t(\d+)\t(OK|FORCED|BAD)\t(.*)$')
 
 
