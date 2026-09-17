@@ -1622,3 +1622,37 @@ bytes) by the same permissive `and`/`or [rX+off],#imm` constructor. Not yet inve
 New real-toolchain `objdump` invocation (read-only, on an already-unpacked local firmware image)
 and a fresh Ghidra headless forced-linear-sweep import (also read-only, local). No MIDI, USB, or
 OTA/flash I/O was performed or attempted at any point.
+
+### Follow-up same day: the vendor toolchain has a working assembler — used to test, not confirm, the ARM-condition hypothesis
+
+The vendor `clang` accepts `-x assembler` input and has a real, error-checking parser for this
+ISA's own `if (regA <op> imm) goto label` / `ifs (...)` pseudo-syntax (confirmed with deliberate
+garbage input producing genuine `syntax error`/`condition is expected` diagnostics, not a silent
+no-op) — a capability not previously exploited in this project's research and worth keeping in mind
+for future rounds (a real assembler is strictly more useful than the compiler-probe technique from
+the ninth round, since it doesn't depend on `-O2` choosing to emit a given construct from C).
+
+Used it to test the twelfth round's "matches the ARM condition-code table" hypothesis for the
+missing `0x1f04`–`0x1f07`/`0x1f0f` slots directly: `if (r0 mi) goto`, `if (r0 pl) goto`, `if (r0
+vs) goto`, `if (r0 vc) goto`, `if (r0 nv) goto`, and (as a control against already-implemented
+slots) `if (r0 cs) goto` / `if (r0 cc) goto` were all rejected with `error: condition is expected`.
+This rules out one specific thing — the assembler's `if (regA <token>) goto` grammar has no named-
+condition-keyword path at all, only comparison operators (`==`,`!=`,`<`,`<=`,`>`,`>=`) — but it does
+**not** confirm or refute whether the opcode slots themselves exist in silicon with ARM-style flag
+semantics, since (as the ninth round already found for the full special-register bitmap push) this
+assembler's exposed high-level syntax doesn't necessarily cover every real opcode the hardware
+implements. Separately, closer inspection of the twelfth round's real examples weakens the
+hypothesis on its own terms: the embedded register (`r15`, `r0`, `r13` — not constant) and
+immediate (`-1`, `242`, `-223`, `144`, `384`, `0`, `288` — not a fixed sentinel like `0`) both vary
+meaningfully across real occurrences, which is odd for fields that a pure flags-only test would
+leave unused/decorative.
+
+**Net effect: still not fixed, and now for a better-understood reason than "unresolved flag
+semantics" alone.** The ARM-condition-table structural match from the twelfth round remains the only
+hypothesis on the table, but it is weaker than first presented and unconfirmable with the evidence
+and tooling available. Also confirmed useful for later rounds: this assembler *can* reach the wide
+32-bit-immediate (`imm1627`) encoding for the already-implemented comparison conditions when given
+an immediate the more compact `packedimm12` form can't represent (e.g. `if (r15 == 2047) goto`
+forces the 6-byte form; round numbers like `2048`/`4096`/`65536` stay in the compact form via
+`packedimm12`'s own shifted-immediate trick) — useful for generating targeted synthetic ground
+truth in a future round without needing to find real firmware examples.
