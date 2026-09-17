@@ -502,6 +502,24 @@ poppcregs: {pc,popreglist4} is popreglist4 & pc & ins0003
 }
 
 #
+# rA = h[sp+imm12] (s)
+# => lh.s rA, [sp+imm12] (signed)
+#
+# Signed-halfword counterpart to lb.s above; sits at ins0011=0x9d9, filling
+# the gap between the word family (0x9d4) and the byte family (0x9dc-0x9de).
+# There is no store-side variant in the ground truth (same asymmetry as
+# lb.s / sb, which don't share a code either). Confirmed against
+# research/disasm/app_full_disasm_llvm.txt: reg=bits(12,15) of the second
+# halfword, imm12 = imm1627*2 (always even, 136 real occurrences checked).
+#
+:lh.s eregA, [sp+imm12] is group=7 & ins0011=0x9d9 & sp; eregA & imm1627
+[ imm12 = imm1627 << 1; ]
+{
+    addr:4 = sp + imm12;
+    eregA = sext(*:2 addr);
+}
+
+#
 # rA = [sp+imm12] (unsigned)
 # => lb rA, [sp+imm12]
 #
