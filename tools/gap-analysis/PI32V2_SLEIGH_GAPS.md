@@ -1940,3 +1940,91 @@ New vendor-assembler invocations (local, read-only besides throwaway `.o` files,
 already-checked-in `research/wide-branch/` probe corpus), a `sleigh` recompile, and headless Ghidra
 re-imports of already-unpacked local firmware images plus one already-existing ground-truth text
 corpus. No MIDI, USB, or OTA/flash I/O at any point.
+
+## Sixteenth round: reg+reg parallel-arithmetic family decoded (`ins0611=0x11/0x14/0x15`)
+
+Picked up the four families the fifteenth round explicitly left open. Re-decoded the existing
+`research/wide-branch/src/probe_reg*.s`/`probe_dsp2.s`/`probe_macacc.s` corpus bit-by-bit with an
+ad hoc Python field decoder, then cross-checked every candidate field against **6 independent
+real-firmware occurrences** of `ins0611=0x11` and 5 of `ins0611=0x15` pulled straight from the
+cached ground truth (not just the synthetic probes) before writing any SLEIGH.
+
+### `ins0611=0x11` (packed reg+reg add/sub): decoded, real operand fields, `TODO()` semantics
+
+Same per-lane clamp/select shape as the already-implemented immediate family (`psops.ssat`/
+`.usat`), with the immediate slot replaced by a second source register:
+
+- Destination is **always** a register pair (`edregA`), regardless of the raw `eregA` field's own
+  low bit -- confirmed on 6/6 real-firmware samples, including one where a raw `eregA` of 3 still
+  prints as `r3_r2` (pair anchored at `eregA & ~1`), not `r3`.
+- Each source register's real number is `(fieldNibble >> 1) * 2 + selectBit`, where `selectBit`
+  is an independent per-lane bit (matching the immediate family's `imm1617` bit meaning exactly).
+  This isn't just "one register split into hi/lo halves" -- two of the six real samples print
+  **genuinely different register numbers** for the two lane positions (`r1,r0` and `r8,r9`), which
+  the fifteenth round's writeup flagged as the reason this needed its own derivation. All 6 real
+  samples match this model exactly, including those two.
+- `imm1819` (per-lane +/- operator select) carries over unchanged from the immediate family and
+  matches all 6 samples' operator text.
+- Two bits inside the `imm0104` field range vary across the real samples with no correlation to
+  any visible operand or operator -- left unconstrained rather than guessed at.
+
+Decode-only (`TODO()` body): the per-lane register construction above isn't printed either
+(SLEIGH's `attach` binds a raw field's numeric value to a name, not a computed expression, so
+showing `r8,r9` instead of a single `eregB` would need a sub-table exporting a computed register
+varnode) -- same approximation the mul family already makes for its own `eregB` operand. Closes
+the one real-firmware occurrence of this family (`0x02058b4c`).
+
+### `ins0611=0x14`/`0x15` ("x2"/dot-product reg+reg family): decoded, `TODO()` semantics
+
+`0x14` is add/sub-shaped (matches `0x11`'s `imm1819` meaning), `0x15` is multiply/
+multiply-accumulate-shaped (matches the existing `0x17` mul family's `imm1819`
+overwrite/acc-add/acc-sub meaning). A new, independent bit was found and added to
+`pi32v2.slaspec` as `imm0404` (bit 4, overlapping the top bit of the pre-existing `imm0104`
+field the same way `eregAl`/`eregA` already overlap elsewhere in this module): it selects a
+single-register destination (`eregA`) vs. a register-pair destination (`edregA`), confirmed via
+two `probe_reg2.s` encodings identical in every other bit ("`r3 = ...`" vs. "`r3_r2 = ...`") and
+matching all 5 real-firmware `ins0611=0x15` occurrences found (all pair-dest). Only `0x14` with a
+single-register dest has been directly observed, so only that form is implemented for `0x14`; a
+paired-dest `0x14` form is not asserted.
+
+12 new constructors added (`psmulx2`/`psmacx2`/`psmsux2` for the single-dest `0x15` forms,
+`pdmulx2`/`pdmacx2`/`pdmsux2` for the pair-dest `0x15` forms, each `.ssat`/`.usat`) plus 2 more
+(`psopsx2.ssat`/`.usat`) for `0x14`. As with `0x11`, operands are decode-correct at the
+family/register level with `TODO()` bodies; the vendor's explicit `.h`/`.l` half-register operand
+suffixes are not modeled, matching the existing mul family's precedent.
+
+Closes 4 of 5 real-firmware occurrences immediately (`0x0205cd6c`, `0x0205d16c`, `0x0205aadc`,
+plus the `0x11` one above). The remaining 2 addresses (`0x0205ce54`, `0x0205d254`) carry **the
+exact same 4 bytes** as two now-fixed addresses elsewhere and still report `BAD` -- confirmed to
+be a decode-cascade/harness artifact (address-dependent, not byte-dependent: identical encodings
+decode fine at other addresses), the same general class of noise already documented in
+`AGENT_HANDOVER.md` for the forced linear-sweep harness, not a grammar defect. Not chased further.
+
+### `ins0611=0x12` ("plain scalar half op"): still open, insufficient evidence
+
+Only 2 samples exist in the entire corpus (one synthetic, one real-firmware, `0x0207615e`:
+`r11.h = r6.l - 250`), and they don't agree on which bits control the `.h`/`.l` half-selects for
+source and destination -- not enough to pin an encoding with confidence. Left unimplemented rather
+than guessed; a wrong-but-confident decode here would be worse than an honest gap.
+
+### Regression check
+
+Ran the full pipeline against the same cached pro013 ground truth. Baseline (15th-round state):
+39 gap addresses. This round: 35 (32 BAD, 1 LEN_MISMATCH, 2 MISSING). Verified with an exact
+before/after address-set diff (not just the printed top-N ranking): 4 addresses fixed
+(`0x02058b4c`, `0x0205aadc`, `0x0205cd6c`, `0x0205d16c`), zero new regressions.
+
+### Files touched this round
+
+- `data/languages/pi32v2.slaspec` (one new token field: `imm0404`)
+- `data/languages/pi32v2_ins_para_arithops.sinc` (16 new decode-only constructors:
+  `psopsrr.ssat`/`.usat`, `psopsx2.ssat`/`.usat`, `psmulx2`/`psmacx2`/`psmsux2` `.ssat`/`.usat`,
+  `pdmulx2`/`pdmacx2`/`pdmsux2` `.ssat`/`.usat`)
+- `data/languages/pi32v2.sla` (recompiled)
+
+### Non-invasive-first compliance (this round)
+
+Re-decoded probe bytes already checked into `research/wide-branch/` and cross-checked against the
+already-existing cached ground truth and firmware image -- no new vendor-toolchain invocations, no
+new firmware images. A `sleigh` recompile and headless Ghidra re-imports of already-local files
+only. No MIDI, USB, or OTA/flash I/O at any point.

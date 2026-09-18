@@ -140,6 +140,16 @@ define token instr(16)
     # on token instr2 at the same (8,11) bit range -- no new word1 field needed)
     imm0104 = (1,4)
 
+    # Packed reg+reg "x2"/dot-product multiply family (ins0611=0x14/0x15,
+    # pi32v2_ins_para_arithops.sinc): bit 4 overlaps the top bit of imm0104
+    # above but is independently meaningful there -- it selects whether the
+    # destination is a single scalar register (0, plain eregA) or a register
+    # pair (1, edregA). Confirmed empirically: two otherwise-identical
+    # ins0611=0x15 probe encodings differ only in this bit and print
+    # "r3 = ..." vs "r3_r2 = ..." respectively; every real-firmware
+    # ins0611=0x15 occurrence found has it set (pair dest).
+    imm0404 = (4,4)
+
     imm0005 = (0,5)
 	imm0005s = (0,5) signed
 	imm0305  = (3,5)

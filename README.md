@@ -37,7 +37,9 @@ addresses at once instead of chasing one-off mismatches.
 | + sixth round's single-register bitmap push/pop, `packedimm12` 7th mode, and misc fixes | 68 | 99.97% |
 | + seventh round's fixes, cross-validated against a second real firmware image | 58 | 99.972% |
 | + eighth round's fixes, found via a third real firmware image (147→111 gaps on that image; no change on this baseline) | 58 | 99.972% |
-| + fourteenth round's two missing signed `packedimm12` compare-and-branch condition slots | 54 | **99.974%** |
+| + fourteenth round's two missing signed `packedimm12` compare-and-branch condition slots | 54 | 99.974% |
+| + fifteenth round's wide-branch remainder and packed saturating add/sub-immediate family | 39 | 99.981% |
+| + sixteenth round's packed reg+reg parallel-arithmetic family (`ins0611=0x11/0x14/0x15`) | 35 | **99.983%** |
 
 Across all four rounds, previously-undecoded `pi32v2` encoding families were identified and
 added, each verified against every real occurrence in the ground truth (not a sample) and,
@@ -192,6 +194,28 @@ an instruction family this module had already mostly implemented:
   images (this baseline: 56→54 gaps; two other images cross-validated in earlier rounds: 75→72
   and 109→106). This is unrelated to the thirteenth round's still-open flag-condition gap
   (`MI`/`PL`/`VS`/`VC`/`NV`), which remains deliberately unresolved for the same reason as before.
+- **A fifteenth round closed the wide-branch condition-code remainder** (`ins0012=0x1f04-0x1f07,
+  0x1f0e-0x1f0f`, decode-only/`TODO()`, matching the vendor disassembler's own inability to name
+  the condition) **and the packed saturating add/sub-with-immediate family**
+  (`ins0611=0x13`, `psops.ssat`/`.usat`) **with real, firmware-verified p-code semantics** -- the
+  sibling mul/mul-accumulate-with-immediate family (`ins0611=0x17`) was also decoded but left
+  `TODO()`-bodied since its exact arithmetic isn't independently confirmable from available
+  evidence. Two previously-undocumented SLEIGH compiler limitations were found and worked around
+  along the way (a `local` conditionally reassigned across an `if`/`goto` branch, and `zext()`/
+  `sext()` applied directly to a raw pattern field) -- see the gap-analysis doc for the minimal
+  repros. 54 to 39 gap addresses, zero regressions.
+- **A sixteenth round decoded the packed reg+reg parallel-arithmetic family**
+  (`ins0611=0x11` two-full-source-register add/sub, and the "x2"/dot-product-style
+  `ins0611=0x14`/`0x15` reg+reg variants), cross-checked against 11 real-firmware occurrences
+  across the two families (not just the synthetic probe corpus) with a 100% field match,
+  including two samples that print genuinely different register numbers for what looked like a
+  single duplicated operand -- ruling out a simpler "one register, two halves" model. All new
+  constructors are decode-only (`TODO()` bodies), matching this project's own convention for
+  confirmed-decode/unconfirmed-arithmetic instructions. The one adjacent family sharing this
+  opcode neighborhood (`ins0611=0x12`, a plain scalar half-register op) was left unimplemented --
+  only 2 samples exist project-wide and they don't agree on the half-select bits, not enough to
+  pin an encoding with confidence. 39 to 35 gap addresses, zero regressions (verified by exact
+  before/after address-set diff, not just the ranked top-N summary).
 
 Full derivation, confidence levels, and the remaining (lower-impact, harder) open gaps are
 documented in [`tools/gap-analysis/PI32V2_SLEIGH_GAPS.md`](tools/gap-analysis/PI32V2_SLEIGH_GAPS.md).
@@ -219,7 +243,7 @@ paths, so it works against any target firmware, not just the one this fork was b
 - dv10 *(this is Blackfin, not implemented)*
 - dv12 *(this is Blackfin, not implemented)*
 - pi32 *(not complete, but somewhat usable — untouched by this fork)*
-- **pi32v2** *(99.974% instruction-match rate against real firmware ground truth — see above;
+- **pi32v2** *(99.983% instruction-match rate against real firmware ground truth — see above;
   a handful of lower-impact encoding families still open, see the gap-analysis doc)*
 - q32s *(very early stage — untouched by this fork)*
 - f59 *(not implemented yet)*
@@ -234,11 +258,12 @@ paths, so it works against any target firmware, not just the one this fork was b
   - Maybe refactor the mnemonics? (like the ones used on q32s and pi32v2? or do it the other way around?)
   - Change flags on instructions that change them (e.g. add, sub, rotc, etc.)
 - pi32v2
-  - Remaining missing instructions (a dual-register/half-register `(ssat,x2)` parallel-
-    arithmetic family now with a partial bit-level hypothesis but at least one unresolved
-    selector bit, a wide-immediate memory-operand AND family, a separate `group=7`-based
-    special-register push/pop mechanism distinct from the existing range-list family, several
-    single-occurrence dual-fetch parallel multiply-accumulate and saturating-arithmetic forms, a
+  - Remaining missing instructions (the reg+reg `(ssat,x2)` parallel-arithmetic family is now
+    decode-only/`TODO()`-bodied rather than fully open; still genuinely unimplemented: its
+    `ins0611=0x12` plain-scalar-half-op sibling (too few samples to pin the half-select bits), a
+    wide-immediate memory-operand AND family, a separate `group=7`-based special-register
+    push/pop mechanism distinct from the existing range-list family, several single-occurrence
+    dual-fetch parallel multiply-accumulate and saturating-arithmetic forms, a
     `[rX+off] += imm` compound-assign-with-immediate-delta family whose offset/delta packing
     isn't fully solved, and a few other single-occurrence opcodes — see the gap-analysis doc)
   - The wide-immediate `if (rX ?? imm)` conditional-branch family (12 addresses) — deferred

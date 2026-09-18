@@ -238,3 +238,139 @@
 {
     edregA = TODO();
 }
+
+###########################################################################################
+# Reg+reg forms (ins0611=0x11/0x14/0x15) -- decode only, TODO() semantics.
+#
+# Round 17: derived and cross-checked against 6 independent real-firmware
+# occurrences of ins0611=0x11 (100% match on every field below) plus the
+# probe_reg*/probe_dsp2/probe_macacc corpus in research/wide-branch/ for
+# 0x14/0x15. Encoding model (word1 = token instr2 unless noted):
+#
+#   ins0611=0x11: packed reg+reg add/sub, same per-lane clamp/select shape
+#     as the imm form above (psops.ssat/usat), but with the immediate slot
+#     replaced by a second source register:
+#       - dest is always a register pair (edregA), regardless of eregA's own
+#         LSB -- confirmed on 6/6 real firmware samples (e.g. a raw eregA of
+#         3 still prints "r3_r2", the pair anchored at eregA&~1).
+#       - src1's real register per lane is (eregB>>1)*2 + selectBit, where
+#         selectBit is imm1617 bit0 for the "high" lane and bit1 for "low"
+#         (same bit meaning as the imm family). src2 is the same shape using
+#         imm2427>>1 as the pair base and imm0104 bits 2/3 as the per-lane
+#         select. All 6 firmware samples decode their printed operands
+#         exactly this way, including two samples where the two printed
+#         registers genuinely differ (e.g. "r1,r0" and "r8,r9") -- ruling out
+#         a simpler "always-broadcast-same-register" model.
+#       - imm1819 keeps its imm-family meaning here too (bit2 = high lane
+#         op, bit3 = low lane op; 0 = add, 1 = sub) -- confirmed against all
+#         6 samples' +/- operator text.
+#       - Two bits (word0 abs bit1, abs bit4 -- inside the imm0104 field
+#         range but unrelated to the src2 lane-select bits above) vary
+#         independently across the 6 real samples with no correlation to any
+#         visible operand or operator. Left unconstrained/unused here rather
+#         than guessed at.
+#     Not modeled: the exact per-lane register construction above, for the
+#     same reason the mul family doesn't model eregB.l/eregB.h -- SLEIGH
+#     attach only binds a raw field's numeric value to a name, not a
+#     computed expression, so faithfully printing "r8,r9" instead of a
+#     single "r8" would need a sub-table exporting a computed register
+#     varnode. Decode (family/length) and the destination pair are exact;
+#     the two source operands print as plain eregB/eregC registers, an
+#     approximation in the same spirit as the mul family's eregB above.
+#
+#   ins0611=0x14/0x15: same reg+reg shape as 0x11/0x17 respectively (0x14 is
+#     add/sub, matching 0x11's imm1819 meaning; 0x15 is multiply/
+#     multiply-accumulate, matching 0x17's imm1819 overwrite/acc-add/
+#     acc-sub meaning), but the vendor disassembler shows each source
+#     register split into explicit ".h"/".l" halves (e.g. "r6.h,r6.h") that
+#     are NOT modeled here, for the same reason noted above.
+#     Independently of ins0611, word0 bit 4 (field imm0404, added to
+#     pi32v2.slaspec) selects a single-register destination (0, plain
+#     eregA) vs a register-pair destination (1, edregA) -- confirmed via a
+#     pair of probe_reg2.s encodings identical in every other bit ("r3 = ..."
+#     vs "r3_r2 = ..."), and matches all 5 real-firmware ins0611=0x15
+#     occurrences found (all pair-dest, imm0404=1). Only ins0611=0x14 with
+#     imm0404=0 (single dest) has been directly observed -- the single-dest
+#     0x14 forms below are implemented on that evidence; a pair-dest 0x14
+#     form is NOT implemented since no sample confirms it exists.
+###########################################################################################
+
+:psopsrr.ssat edregA, eregB, eregC is group=7 & ins0611=0x11 & imm0000=1 & imm0104 ; edregA & eregB & imm1819 & imm1617 & eregC
+{
+    edregA = TODO();
+}
+
+:psopsrr.usat edregA, eregB, eregC is group=7 & ins0611=0x11 & imm0000=0 & imm0104 ; edregA & eregB & imm1819 & imm1617 & eregC
+{
+    edregA = TODO();
+}
+
+:psopsx2.ssat eregA, eregB, eregC is group=7 & ins0611=0x14 & imm0000=1 & imm0404=0 & imm0104 ; eregA & eregB & imm1819 & imm1617 & eregC
+{
+    eregA = TODO();
+}
+
+:psopsx2.usat eregA, eregB, eregC is group=7 & ins0611=0x14 & imm0000=0 & imm0404=0 & imm0104 ; eregA & eregB & imm1819 & imm1617 & eregC
+{
+    eregA = TODO();
+}
+
+:psmulx2.ssat eregA, eregB, eregC is group=7 & ins0611=0x15 & imm0000=1 & imm0404=0 & imm0104 ; eregA & eregB & imm1819=0 & imm1617 & eregC
+{
+    eregA = TODO();
+}
+
+:psmulx2.usat eregA, eregB, eregC is group=7 & ins0611=0x15 & imm0000=0 & imm0404=0 & imm0104 ; eregA & eregB & imm1819=0 & imm1617 & eregC
+{
+    eregA = TODO();
+}
+
+:psmacx2.ssat eregA, eregB, eregC is group=7 & ins0611=0x15 & imm0000=1 & imm0404=0 & imm0104 ; eregA & eregB & imm1819=1 & imm1617 & eregC
+{
+    eregA = TODO();
+}
+
+:psmacx2.usat eregA, eregB, eregC is group=7 & ins0611=0x15 & imm0000=0 & imm0404=0 & imm0104 ; eregA & eregB & imm1819=1 & imm1617 & eregC
+{
+    eregA = TODO();
+}
+
+:psmsux2.ssat eregA, eregB, eregC is group=7 & ins0611=0x15 & imm0000=1 & imm0404=0 & imm0104 ; eregA & eregB & imm1819=3 & imm1617 & eregC
+{
+    eregA = TODO();
+}
+
+:psmsux2.usat eregA, eregB, eregC is group=7 & ins0611=0x15 & imm0000=0 & imm0404=0 & imm0104 ; eregA & eregB & imm1819=3 & imm1617 & eregC
+{
+    eregA = TODO();
+}
+
+:pdmulx2.ssat edregA, eregB, eregC is group=7 & ins0611=0x15 & imm0000=1 & imm0404=1 & imm0104 ; edregA & eregB & imm1819=0 & imm1617 & eregC
+{
+    edregA = TODO();
+}
+
+:pdmulx2.usat edregA, eregB, eregC is group=7 & ins0611=0x15 & imm0000=0 & imm0404=1 & imm0104 ; edregA & eregB & imm1819=0 & imm1617 & eregC
+{
+    edregA = TODO();
+}
+
+:pdmacx2.ssat edregA, eregB, eregC is group=7 & ins0611=0x15 & imm0000=1 & imm0404=1 & imm0104 ; edregA & eregB & imm1819=1 & imm1617 & eregC
+{
+    edregA = TODO();
+}
+
+:pdmacx2.usat edregA, eregB, eregC is group=7 & ins0611=0x15 & imm0000=0 & imm0404=1 & imm0104 ; edregA & eregB & imm1819=1 & imm1617 & eregC
+{
+    edregA = TODO();
+}
+
+:pdmsux2.ssat edregA, eregB, eregC is group=7 & ins0611=0x15 & imm0000=1 & imm0404=1 & imm0104 ; edregA & eregB & imm1819=3 & imm1617 & eregC
+{
+    edregA = TODO();
+}
+
+:pdmsux2.usat edregA, eregB, eregC is group=7 & ins0611=0x15 & imm0000=0 & imm0404=1 & imm0104 ; edregA & eregB & imm1819=3 & imm1617 & eregC
+{
+    edregA = TODO();
+}
