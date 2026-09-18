@@ -731,6 +731,56 @@
         goto jaddr16e;
 }
 
+###########################################################################################
+# Remaining unresolved slots in this 0x1f0N condition-code space (round 16).
+#
+# ins0012 = 0x1f04/0x1f05/0x1f06/0x1f07/0x1f0e/0x1f0f -- confirmed present in
+# real firmware (8 addresses total across the 6 slots, round 15's
+# cross-validation), but the vendor's OWN objdump prints these as literal
+# "if (rX ?? imm) goto ..." -- i.e. the vendor disassembler itself cannot
+# name the condition, so there is no ground truth to derive one from short
+# of executing real silicon. Modeled with an explicit TODO() condition, same
+# convention as `ifeq` above and `testset` in pi32v2.slaspec: decode length
+# and operands (register, 12-bit immediate, branch target) are real and
+# firmware-confirmed, so the decompiler gets a correct CBRANCH shape, but the
+# actual comparison is left honestly unconfirmed rather than guessed.
+###########################################################################################
+:ifcc04 eregA, #imm1627s, jaddr16e is group=7 & ins0012=0x1f04 ; eregA & imm1627s ; jaddr16e
+{
+    local flag:1 = TODO();
+    if (flag != 0) goto jaddr16e;
+}
+
+:ifcc05 eregA, #imm1627s, jaddr16e is group=7 & ins0012=0x1f05 ; eregA & imm1627s ; jaddr16e
+{
+    local flag:1 = TODO();
+    if (flag != 0) goto jaddr16e;
+}
+
+:ifcc06 eregA, #imm1627s, jaddr16e is group=7 & ins0012=0x1f06 ; eregA & imm1627s ; jaddr16e
+{
+    local flag:1 = TODO();
+    if (flag != 0) goto jaddr16e;
+}
+
+:ifcc07 eregA, #imm1627s, jaddr16e is group=7 & ins0012=0x1f07 ; eregA & imm1627s ; jaddr16e
+{
+    local flag:1 = TODO();
+    if (flag != 0) goto jaddr16e;
+}
+
+:ifcc0e eregA, #imm1627s, jaddr16e is group=7 & ins0012=0x1f0e ; eregA & imm1627s ; jaddr16e
+{
+    local flag:1 = TODO();
+    if (flag != 0) goto jaddr16e;
+}
+
+:ifcc0f eregA, #imm1627s, jaddr16e is group=7 & ins0012=0x1f0f ; eregA & imm1627s ; jaddr16e
+{
+    local flag:1 = TODO();
+    if (flag != 0) goto jaddr16e;
+}
+
 ##
 # Unsigned conditional jumps (register/packedimm32/pcrel16sm2)
 ##

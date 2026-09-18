@@ -127,13 +127,18 @@ define token instr(16)
 	# immediate fields
 	#
     imm0000 = (0,0)
-	imm0001s = (0,1) signed
+    imm0001s = (0,1) signed
 
 	imm0002 = (0,2)
     imm0002s = (0,2) signed
 
     imm0003 = (0,3)
     imm0004 = (0,4)
+
+    # Parallel-arithmetic (ssat/usat) family immediate split (pi32v2_ins_para_arithops.sinc):
+    # unsigned/signed imm = (imm0104 << 4) | imm2427 (imm2427 already existed
+    # on token instr2 at the same (8,11) bit range -- no new word1 field needed)
+    imm0104 = (1,4)
 
     imm0005 = (0,5)
 	imm0005s = (0,5) signed
@@ -146,6 +151,10 @@ define token instr(16)
     imm0406  = (4,6)
 	imm0406s = (4,6) signed
 
+	# Parallel-mul (ssat/usat) family: sign bit of the 9-bit immediate
+	# (imm9 = (imm0505s << 8) | (imm0104 << 4) | imm2427 on token instr2 --
+	# same sign-extend-then-OR construction already used for imm10s below).
+	imm0505s = (5,5) signed
 	imm0407  = (4,7)
 	imm0507s = (5,7) signed
 

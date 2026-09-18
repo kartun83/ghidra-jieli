@@ -1,7 +1,7 @@
-# Parallelized arithmetics operations
+# Parallelized arithmetic operations
 
 ###########################################################################################
-# Subtract
+# Legacy `sub` (pre-existing, untouched)
 ###########################################################################################
 
 #
@@ -13,4 +13,228 @@
     # next instruction is executed first
     delayslot(1);
 	regAl = regBl - regCxl;
+}
+
+###########################################################################################
+#
+# Packed 2x16-bit saturating arithmetic family (ssat/usat) -- immediate forms.
+#
+# Encoding validated empirically (round 16) against the real vendor JieLi
+# pi32v2 llvm/clang 4.0.1 assembler (keysmith toolchain 20250324.1) via fresh
+# probe sweeps re-run from the corpus already checked into
+# research/wide-branch/{src,objdump}/ (probe_ops.s, probe_dsp2.s,
+# probe_reg*.s, probe_macacc.s) and cross-checked bit-by-bit with a small
+# Python field decoder -- see ROUND16_HANDOVER.md for the full derivation
+# and for why the reg-reg (`rN,rN OP rM,rM`) and x2/dot-product forms below
+# are deliberately NOT implemented here (they occupy other ins0611 values
+# and need their own dedicated probe round).
+#
+#   first 16-bit word (LE; token `instr`):
+#     bits  6-11 (ins0611): family tag. Confirmed by direct probe:
+#       0x11 = packed reg+reg add/sub (2 full source regs)      -- NOT implemented
+#       0x12 = plain scalar half op (not actually parallel)     -- NOT implemented
+#       0x13 = packed add/sub, single reg + 8-bit immediate     -- implemented below
+#       0x14 = packed reg+reg add/sub, "x2" dot-product variant -- NOT implemented
+#       0x15 = packed reg+reg mul-accumulate, "x2" variant      -- NOT implemented
+#       0x17 = packed mul / mul-accumulate, reg + 9-bit imm     -- implemented below
+#     bit  0 (imm0000): clamp flag, 0 = unsigned clamp ("usat"), 1 = signed ("ssat")
+#     bits 1-4 (imm0104): immediate bits [7:4]
+#     bit  5 (imm0505s as an unsigned bit): immediate's 9th/sign bit -- only
+#            meaningful for the mul family; the add/sub family's immediate is
+#            confirmed 8-bit only (assembler's own uimm8 diagnostic; every
+#            probed add/sub encoding had bit5=0)
+#   second 16-bit word (token `instr2`):
+#     bit  0 (imm1617 bit0): "high" lane's source-half select (0 = eregB.l, 1 = eregB.h)
+#     bit  1 (imm1617 bit1): "low" lane's source-half select  (0 = eregB.l, 1 = eregB.h)
+#     bit  2 (imm1819 bit0): "high" lane's operator select for add/sub (0 = +, 1 = -);
+#                             for mul, imm1819 as a whole (0/1/3) selects
+#                             overwrite / accumulate-add / accumulate-sub
+#     bit  3 (imm1819 bit1): "low" lane's operator select for add/sub (0 = +, 1 = -)
+#     bits 4-7 (eregB): source register
+#     bits 8-11 (imm2427, pre-existing field): immediate bits [3:0]
+#     bits 12-15 (eregA / edregA): destination register (add/sub: single 32-bit
+#                 reg holding 2 packed 16-bit lanes) or register-pair base
+#                 (mul: uses the pre-existing edregA field/attach, which
+#                 prints "rEven_rOdd" e.g. "r2_r3" -- the vendor's own
+#                 disassembler instead prints "rOdd_rEven", e.g. "r3_r2".
+#                 Both name the SAME two physical registers; only the
+#                 printed label differs. Not worth a second register bank
+#                 just for cosmetic parity -- see ROUND16_HANDOVER.md.)
+#
+# LOW/HIGH lane <-> "first"/"second" mapping: the low 16 bits of the 32-bit
+# destination are treated as the "low" lane (imm1617 bit1 / imm1819 bit1) and
+# the high 16 bits as the "high" lane (imm1617 bit0 / imm1819 bit0). This is
+# the natural reading of the two independent per-lane bits, consistent with
+# every probed sample (all of which happened to set both lanes' bits
+# identically), but the low/high PHYSICAL ASSIGNMENT itself is NOT
+# independently confirmed by execution -- flagged here and in
+# ROUND16_HANDOVER.md as a documented assumption, not a verified fact.
+#
+###########################################################################################
+
+###########################################################################################
+# Packed add/sub with 8-bit immediate -- single 32-bit destination.
+#
+# dst.lane = clamp(  (lane selects eregB.l or eregB.h)  +/-  imm8  )
+# for each of the two 16-bit lanes independently, then packed into dst.
+###########################################################################################
+
+#
+# NOTE on style: every local below is assigned exactly once via straight-line
+# arithmetic (multiply-by-0/1-flag "select", never if/goto), and no raw
+# token FIELD is ever passed directly to zext()/sext() -- only to plain
+# arithmetic (matching the pre-existing `imm10 = (imm0406 << 7) | imm2531`
+# idiom in pi32v2_ins_progflow.sinc, which never zext()s the fields either).
+# Two separate, unrelated SLEIGH compiler limitations were isolated while
+# closing this gap (both reproduced in isolation -- see ROUND16_HANDOVER.md
+# for the minimal repros):
+#   1. A `local` whose value is only established inside a conditionally
+#      taken if/goto branch, then used after the branches converge at a
+#      label, fails with "Main section: Could not resolve at least 1
+#      variable size" -- even when the branch condition is a compile-time
+#      constant. The existing branchy idiom used elsewhere in this codebase
+#      (e.g. `sat16` in pi32v2_ins_logicops.sinc) only works because it
+#      reassigns a real OPERAND (already a fixed-size varnode from the
+#      pattern) across the branch/label, never a `local` temp.
+#   2. `zext(rawField)` / `sext(rawField)` applied directly to an
+#      unconstrained multi-bit pattern field (e.g. `zext(imm1617)`) fails
+#      with the exact same error, independent of any branching -- the raw
+#      field must be used directly in arithmetic (letting the assignment's
+#      declared local size drive automatic widening) instead.
+#
+:psops.ssat eregA, eregB, #imm8 is group=7 & ins0611=0x13 & imm0000=1 & imm0104 ; eregA & eregB & imm1819 & imm1617 & imm2427
+[ imm8 = (imm0104 << 4) | imm2427; ]
+{
+    local srcLo:2 = eregB:2;
+    local eregBshifted:4 = eregB >> 16;
+    local srcHi:2 = eregBshifted:2;
+
+    local loWantsHi:4 = (imm1617 >> 1) & 1;
+    local loSrcFull:4 = (1 - loWantsHi) * zext(srcLo) + loWantsHi * zext(srcHi);
+    local loSrcRaw:2 = loSrcFull:2;
+
+    local hiWantsHi:4 = imm1617 & 1;
+    local hiSrcFull:4 = (1 - hiWantsHi) * zext(srcLo) + hiWantsHi * zext(srcHi);
+    local hiSrcRaw:2 = hiSrcFull:2;
+
+    local loAcc:4 = sext(loSrcRaw);
+    local loSub:4 = (imm1819 >> 1) & 1;
+    local loSign:4 = 1 - 2*loSub;
+    loAcc = loAcc + loSign*imm8;
+
+    local hiAcc:4 = sext(hiSrcRaw);
+    local hiSub:4 = imm1819 & 1;
+    local hiSign:4 = 1 - 2*hiSub;
+    hiAcc = hiAcc + hiSign*imm8;
+
+    local loOver:4 = zext(loAcc s> 32767);
+    local loUnder:4 = zext(loAcc s< -32768);
+    local loMid:4 = 1 - loOver - loUnder;
+    local loClamped:4 = loMid*loAcc + loOver*32767 + loUnder*0xffff8000;
+    local loRes:2 = loClamped:2;
+
+    local hiOver:4 = zext(hiAcc s> 32767);
+    local hiUnder:4 = zext(hiAcc s< -32768);
+    local hiMid:4 = 1 - hiOver - hiUnder;
+    local hiClamped:4 = hiMid*hiAcc + hiOver*32767 + hiUnder*0xffff8000;
+    local hiRes:2 = hiClamped:2;
+
+    eregA = zext(loRes) | (zext(hiRes) << 16);
+}
+
+:psops.usat eregA, eregB, #imm8 is group=7 & ins0611=0x13 & imm0000=0 & imm0104 ; eregA & eregB & imm1819 & imm1617 & imm2427
+[ imm8 = (imm0104 << 4) | imm2427; ]
+{
+    local srcLo:2 = eregB:2;
+    local eregBshifted:4 = eregB >> 16;
+    local srcHi:2 = eregBshifted:2;
+
+    local loWantsHi:4 = (imm1617 >> 1) & 1;
+    local loSrcFull:4 = (1 - loWantsHi) * zext(srcLo) + loWantsHi * zext(srcHi);
+    local loSrcRaw:2 = loSrcFull:2;
+
+    local hiWantsHi:4 = imm1617 & 1;
+    local hiSrcFull:4 = (1 - hiWantsHi) * zext(srcLo) + hiWantsHi * zext(srcHi);
+    local hiSrcRaw:2 = hiSrcFull:2;
+
+    local loAcc:4 = zext(loSrcRaw);
+    local loSub:4 = (imm1819 >> 1) & 1;
+    local loSign:4 = 1 - 2*loSub;
+    loAcc = loAcc + loSign*imm8;
+
+    local hiAcc:4 = zext(hiSrcRaw);
+    local hiSub:4 = imm1819 & 1;
+    local hiSign:4 = 1 - 2*hiSub;
+    hiAcc = hiAcc + hiSign*imm8;
+
+    # unsigned 16-bit saturate: the subtract case above can drive a small
+    # zero-extended source below zero (wrapping to a huge unsigned value in
+    # loAcc/hiAcc's 32-bit container), so an out-of-range-low check is needed
+    # here too, unlike the signed case's symmetric over/under handling.
+    local loNeg:4 = zext(loAcc s< 0);
+    local loOverRaw:4 = zext(loAcc > 65535);
+    local loOver:4 = loOverRaw * (1 - loNeg);
+    local loMid:4 = 1 - loNeg - loOver;
+    local loClamped:4 = loMid*loAcc + loOver*65535;
+    local loRes:2 = loClamped:2;
+
+    local hiNeg:4 = zext(hiAcc s< 0);
+    local hiOverRaw:4 = zext(hiAcc > 65535);
+    local hiOver:4 = hiOverRaw * (1 - hiNeg);
+    local hiMid:4 = 1 - hiNeg - hiOver;
+    local hiClamped:4 = hiMid*hiAcc + hiOver*65535;
+    local hiRes:2 = hiClamped:2;
+
+    eregA = zext(loRes) | (zext(hiRes) << 16);
+}
+
+###########################################################################################
+# Packed mul / mul-accumulate -- register-pair destination, 9-bit immediate.
+#
+# Decode confirmed byte-for-byte (destination register, source register,
+# immediate value, overwrite/accumulate-add/accumulate-sub selector all
+# match fresh vendor-assembler probes). The exact per-lane-to-pair value
+# mapping and whether clamping happens before or after accumulation are NOT
+# confirmed (round 15's placeholder `edregA = (zext(pkdimm9)<<32)|zext(...)`
+# was not real arithmetic either) -- modeled as an explicit TODO() per this
+# project's own convention for confirmed-decode/unconfirmed-semantics
+# instructions (see `ifeq`/`testset`), so length + operands are right for
+# the decompiler and the differential gap tooling without asserting an
+# unverified numeric model.
+###########################################################################################
+
+:psmul.ssat edregA, eregB, #imm9 is group=7 & ins0611=0x17 & imm0000=1 & imm0505s & imm0104 ; edregA & eregB & imm1819=0 & imm1617 & imm2427
+[ imm9 = (imm0505s << 8) | (imm0104 << 4) | imm2427; ]
+{
+    edregA = TODO();
+}
+
+:psmul.usat edregA, eregB, #imm9 is group=7 & ins0611=0x17 & imm0000=0 & imm0505s & imm0104 ; edregA & eregB & imm1819=0 & imm1617 & imm2427
+[ imm9 = (imm0505s << 8) | (imm0104 << 4) | imm2427; ]
+{
+    edregA = TODO();
+}
+
+:psmac.ssat edregA, eregB, #imm9 is group=7 & ins0611=0x17 & imm0000=1 & imm0505s & imm0104 ; edregA & eregB & imm1819=1 & imm1617 & imm2427
+[ imm9 = (imm0505s << 8) | (imm0104 << 4) | imm2427; ]
+{
+    edregA = TODO();
+}
+
+:psmac.usat edregA, eregB, #imm9 is group=7 & ins0611=0x17 & imm0000=0 & imm0505s & imm0104 ; edregA & eregB & imm1819=1 & imm1617 & imm2427
+[ imm9 = (imm0505s << 8) | (imm0104 << 4) | imm2427; ]
+{
+    edregA = TODO();
+}
+
+:psmsu.ssat edregA, eregB, #imm9 is group=7 & ins0611=0x17 & imm0000=1 & imm0505s & imm0104 ; edregA & eregB & imm1819=3 & imm1617 & imm2427
+[ imm9 = (imm0505s << 8) | (imm0104 << 4) | imm2427; ]
+{
+    edregA = TODO();
+}
+
+:psmsu.usat edregA, eregB, #imm9 is group=7 & ins0611=0x17 & imm0000=0 & imm0505s & imm0104 ; edregA & eregB & imm1819=3 & imm1617 & imm2427
+[ imm9 = (imm0505s << 8) | (imm0104 << 4) | imm2427; ]
+{
+    edregA = TODO();
 }

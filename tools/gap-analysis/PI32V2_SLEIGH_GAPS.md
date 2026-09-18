@@ -1831,3 +1831,112 @@ splits its own conditions across `0x1f0X`/`0x1f2X`.
 New vendor-assembler invocations (local, read-only besides throwaway `.o` files), a `sleigh`
 recompile, and headless Ghidra re-imports of already-unpacked local firmware images plus one
 already-existing ground-truth text corpus. No MIDI, USB, or OTA/flash I/O at any point.
+
+## Fifteenth round: wide-branch remainder closed; packed saturating-arithmetic immediate family
+## (add/sub: real semantics; mul: decode only)
+
+A prior session mapped the encoding for two remaining gap families -- the wide-immediate
+compare-branch family's last few unknown-condition slots, and a packed 2x16-bit saturating
+arithmetic ("ssat"/"usat") family used by immediate-operand add/sub/mul instructions -- but its
+`.sinc` changes did not compile (`sleigh` failed with "Mismatched tokens when combining
+patterns"), so nothing from that investigation had landed. This round fixed the compile break,
+completed real semantics where the evidence supported it, and closed the wide-branch remainder.
+
+### Wide-branch remainder: closed
+
+`ins0012 = 0x1f04/0x1f05/0x1f06/0x1f07/0x1f0e/0x1f0f` (8 real firmware addresses across the 6
+slots) are confirmed present in real firmware, but the vendor's own `objdump` prints these as a
+literal `if (rX ?? imm) goto ...` -- the vendor disassembler itself cannot name the condition, so
+there is no ground truth to derive one from short of executing real silicon. Added six new
+constructors (`pi32v2_ins_progflow.sinc`) with a `TODO()` condition, exactly mirroring the
+existing `ifeq`/`testset` convention already used elsewhere in this module for
+confirmed-decode/unconfirmed-semantics instructions: decode length, register operand, signed
+12-bit immediate (`imm1627s`, matching the vendor disassembler's own signed print convention --
+confirmed against a real occurrence printing `-1`), and branch target are all real and
+firmware-confirmed; the actual comparison is honestly left unresolved rather than guessed.
+
+### Packed saturating add/sub-with-immediate (`ins0611=0x13`): closed with real semantics
+
+Re-ran the fresh vendor-assembler probes already checked into `research/wide-branch/{src,objdump}/`
+(`probe_ops.s`, `probe_dsp2.s`) and cross-checked every field bit-by-bit with a small ad hoc Python
+decoder. This confirmed the prior session's encoding table (clamp flag, 8-bit immediate split
+across two words, per-lane source-half select, per-lane +/- operator select, single 32-bit packed
+destination) and implemented real saturating-add/sub p-code for both `psops.ssat` and
+`psops.usat`, verified byte-for-byte against a real firmware occurrence
+(`0x0204bce8`: `r15 = r15.h,r15.h -|- 252 (ssat)` -> `psops.ssat r15,r15,#0xfc`, length 4, OK).
+
+The low/high-lane-to-physical-half assignment is a documented assumption (every probed sample
+happened to set both lanes' select/op bits identically, so the mapping can't be distinguished from
+its mirror image without executing real silicon) -- flagged in the `.sinc` header comment, not
+independently confirmed.
+
+### Packed saturating mul/mul-accumulate-with-immediate (`ins0611=0x17`): decode only
+
+Destination register pair, source register, 9-bit signed immediate, and the
+overwrite/accumulate-add/accumulate-sub selector (encoded in the same 2-bit field the add/sub
+family uses for its per-lane operator, confirmed via `probe_macacc.s`) are all decode-confirmed.
+The exact per-lane-to-pair value mapping and whether clamping happens before or after accumulation
+are not -- modeled with an explicit `TODO()` body (`psmul`/`psmac`/`psmsu`, `.ssat`/`.usat`), same
+convention as the wide-branch remainder above. The register-pair destination reuses the
+pre-existing `edregA` field/attach, which prints "rEven_rOdd" (e.g. `r2_r3`); the vendor's own
+disassembler prints the same two physical registers as `r3_r2`. Cosmetic difference only, not
+worth a second register bank.
+
+### Explicitly still open (not touched this round)
+
+- `ins0611 = 0x11` (packed reg+reg add/sub, two full source registers)
+- `ins0611 = 0x12` (a plain scalar half-register op, not actually parallel, sharing this family's
+  opcode neighborhood)
+- `ins0611 = 0x14` (packed reg+reg add/sub, "x2" dot-product-style variant)
+- `ins0611 = 0x15` (packed reg+reg mul-accumulate, "x2" variant)
+
+All four are real, decode-confirmed-present-but-unimplemented (probe corpus already collected in
+`research/wide-branch/src/probe_reg*.s`, `probe_reg2.s`, `probe_reg3.s`), but each needs its own
+register-field derivation (unlike the immediate forms above, some samples showed the two lanes'
+source registers as genuinely different register NUMBERS, not just different halves of one
+register, e.g. `r3_r2 = r8,r9 -|- r12,r13 (usat)` -- the field layout for that fourth operand
+register is not yet derived) and were deliberately left alone this round rather than guessed.
+
+### Two SLEIGH-compiler gotchas discovered while fixing the compile break
+
+Both reproduced in isolation with minimal repros; documented in the `pi32v2_ins_para_arithops.sinc`
+header comment so they aren't rediscovered at cost next time:
+
+1. A `local` temporary whose value is only established inside a conditionally-taken `if`/`goto`
+   branch, then used after the branches converge at a label, fails to compile with `Main section:
+   Could not resolve at least 1 variable size` -- even when the branch condition is a compile-time
+   constant (`if (1==0) goto ...`). Fix: never conditionally reassign a `local` across a
+   branch/label; either reassign a real fixed-size OPERAND directly (the pre-existing `sat16`
+   idiom), or compute the selection with branch-free arithmetic (`(1-flag)*a + flag*b`), which is
+   what this round's `psops.ssat`/`psops.usat` bodies do throughout.
+2. `zext()`/`sext()` applied directly to a raw, unconstrained multi-bit pattern field (e.g.
+   `zext(imm1617)`) fails with the same error, independent of any branching. Fix: use the raw field
+   directly in arithmetic and let the target `local`'s declared size drive automatic widening
+   (matching the pre-existing `imm10 = (imm0406 << 7) | imm2531` idiom, which never zext()s its
+   constituent fields either) -- only `zext()`/`sext()` a value that already has a fixed size (a
+   comparison's 1-byte boolean result, a truncated local, a real operand).
+
+### Regression check
+
+Ran the full pipeline (`DumpDisasm.java` + `pi32v2_sleigh_diff.py`) against the cached pro013
+ground truth already in `research/`. Baseline (14th-round state): 54 gap addresses (39 BAD, 10
+LEN_MISMATCH, 5 MISSING). This round: 39 gap addresses (36 BAD, 1 LEN_MISMATCH, 2 MISSING) --
+every category improved, zero new regressions, all 15 closed addresses accounted for by the
+wide-branch remainder and the add/sub-immediate family fixed above.
+
+### Files touched this round
+
+- `data/languages/pi32v2.slaspec` (two new token fields: `imm0104`, `imm0505s`; removed two
+  fields that duplicated the pre-existing `imm2427` at the same bit range)
+- `data/languages/pi32v2_ins_para_arithops.sinc` (real `psops.ssat`/`psops.usat`; decode-only
+  `psmul`/`psmac`/`psmsu` `.ssat`/`.usat`)
+- `data/languages/pi32v2_ins_progflow.sinc` (six new constructors, `ins0012=0x1f04`-`0x1f07`,
+  `0x1f0e`-`0x1f0f`)
+- `data/languages/pi32v2.sla` (recompiled)
+
+### Non-invasive-first compliance (this round)
+
+New vendor-assembler invocations (local, read-only besides throwaway `.o` files, re-run from the
+already-checked-in `research/wide-branch/` probe corpus), a `sleigh` recompile, and headless Ghidra
+re-imports of already-unpacked local firmware images plus one already-existing ground-truth text
+corpus. No MIDI, USB, or OTA/flash I/O at any point.
