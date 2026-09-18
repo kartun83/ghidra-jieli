@@ -13,3 +13,11 @@ data/languages/dv10.sla
 data/languages/dv12.sla
 data/languages/f59.sla
 data/languages/f95.sla
+
+# Cross-session agent scratch: handover docs, open-gap research notes, and
+# other working state for whichever agent picks up the remaining gap-closing
+# rounds. Not part of the SLEIGH module itself — keep local only.
+AGENT_HANDOVER.md
+pi32v2_open_gaps_agent_research.md
+pi32v2_open_gaps_synthetic_research.md
+pi32v2_wide_immediate_branch_handover.md
